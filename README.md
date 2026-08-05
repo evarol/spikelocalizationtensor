@@ -9,6 +9,26 @@ low-dimensional basis shared across every spike in the recording. There is no ne
 network and no gradient descent — both blocks of the fit have closed forms, so the
 objective decreases monotonically and converges in about three iterations.
 
+![approach](docs/panels/schematic.png)
+
+**Reading the figure.** Top row, left to right: a measured spike on its 10 nearest contacts
+is approximated as one **spatial footprint** `g_s` — a single site chosen from 2.6 M
+candidates, shown as the profile it selected with the site circled — times one **time
+course** `v_sᵀa`. Multiplying them gives the reconstruction, overlaid on the measurement at
+right.
+
+The two factors are the two scientific readouts, and that is the point of the model. The
+spatial factor gives every spike a **centroid** (`anchor + μ_k`), which is a localization —
+bottom left, at true aspect, coloured by which basis component each spike leans on. The
+temporal factor gives every spike a coefficient vector **`v_s`** over a basis shared by all
+2.5 M spikes — bottom middle for the example spike, bottom right for the basis itself — which
+is a waveform-type signature.
+
+So one factorization answers *where the neuron is* and *what kind of waveform it has*, from
+the same fit, with no clustering step in between.
+
+Regenerate with `python3 docs/make_schematic.py --runs <runs> --tag lat64_monopole_Q8`.
+
 ---
 
 ## The model

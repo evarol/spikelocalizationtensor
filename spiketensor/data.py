@@ -12,11 +12,16 @@ from __future__ import annotations
 
 import sys
 from dataclasses import dataclass
+import os
 from pathlib import Path
 
 import numpy as np
 
 REPO = Path(__file__).resolve().parents[1]
+# The recording is not distributed with the package. Point SPIKETENSOR_DATA at the
+# directory that holds results/ and data/; it defaults to the repo root so a checkout with
+# the data dropped in beside it also works.
+DATA_ROOT = Path(os.environ.get("SPIKETENSOR_DATA", REPO))
 from spiketensor.probe_geometry import build_neighborhood_lookup  # noqa: E402
 
 N_NEIGHBORS = 10
@@ -113,7 +118,7 @@ class Recording:
 
 # --------------------------------------------------------------------------- #
 def load_np1() -> Recording:
-    R = REPO / "results"
+    R = DATA_ROOT / "results"
     ch = np.load(R / "channel_locations.npy").astype(np.float64)
     lookup, anchors = neighborhood_lookup(ch, "distance")
     mp = np.stack([np.load(R / f"tpca_monopolar_full/spike_locs_{a}.npy") for a in "xyz"], 1)
@@ -138,7 +143,7 @@ def load_np1() -> Recording:
 
 
 def load_ultra() -> Recording:
-    R = REPO / "results/np_ultra"
+    R = DATA_ROOT / "results/np_ultra"
     ch = np.load(R / "raw/channel_locations.npy").astype(np.float64)
     lookup, anchors = neighborhood_lookup(ch, "lexsort_yx")
     mp = np.stack([np.load(R / f"raw/spike_locs_{a}.npy") for a in "xyz"], 1)
@@ -171,8 +176,8 @@ def gt_motion_trace(t_sec: np.ndarray) -> np.ndarray:
     22 steps alternating 0 and 50 um; first transition at t=578.77 s, last at
     t=1583.48 s. Position is 0 outside that window.
     """
-    pos = np.load(REPO / "data/dataset1/manip.positions.npy").reshape(-1)
-    ts = np.load(REPO / "data/dataset1/manip.timestamps_p1.npy").reshape(-1)
+    pos = np.load(DATA_ROOT / "data/dataset1/manip.positions.npy").reshape(-1)
+    ts = np.load(DATA_ROOT / "data/dataset1/manip.timestamps_p1.npy").reshape(-1)
     # LINEAR interpolation, not zero-order hold. The entries are manipulator
     # WAYPOINTS and the stage ramps between them -- the recording is named
     # "zigzag" for that reason. Reading them as a square wave is wrong and badly
@@ -185,7 +190,7 @@ def gt_motion_trace(t_sec: np.ndarray) -> np.ndarray:
 
 
 def gt_motion_window():
-    ts = np.load(REPO / "data/dataset1/manip.timestamps_p1.npy").reshape(-1)
+    ts = np.load(DATA_ROOT / "data/dataset1/manip.timestamps_p1.npy").reshape(-1)
     return float(ts[0]), float(ts[-1])
 
 
