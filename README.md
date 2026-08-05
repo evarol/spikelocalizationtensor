@@ -204,8 +204,10 @@ once, which is how a hyperparameter axis is best read.
 
 ## The panels
 
-Every row carries all of the following. Screenshots below are from `d_bank_all6` — a 64³
-lattice with a six-family mixed dictionary, the best reconstruction in the sweep.
+Every row carries all of the following. Screenshots below are from **`lat64_monopole_Q8`**
+— a 64³ lattice (262,144 sites) with 10 monopole scales and a Q=8 time basis, fitted to
+2.48 M spikes. It reaches nMSE 0.1402 and recovers the imposed drift at r = +0.857, close to
+the monopole baseline's +0.865, using 38% of its sites and 263,418 of its 2.6 M candidates.
 
 ### `dc` — pairwise ZNCC and the recovered motion
 
@@ -255,15 +257,18 @@ moving, so correlation reads as success where slope reads as failure.
 ![components](docs/panels/components.png)
 
 The time basis, where in the volume the sites actually get used, depth usage across the
-geometric z lattice, and profile usage coloured by kernel family with per-family
-percentages — which is how a mixed dictionary reveals its composition.
+geometric z lattice, and profile usage with bars coloured by kernel family. For a
+single-family dictionary like this one the last panel reads as a scale histogram; for a
+mixed dictionary it is how the composition is revealed, with the per-family share in the
+title.
 
 ### `basis` — the time basis, one panel per component
 
 ![basis](docs/panels/basis.png)
 
-The overlaid basis is unreadable at Q=32, so each component gets its own panel, sorted by
-usage and coloured by rank. Since `v_s` is free, no spike "uses" one component outright;
+Overlaying the basis becomes unreadable as Q grows, so each component gets its own panel,
+sorted by usage and coloured by rank; the grid adapts to Q. Since `v_s` is free, no spike
+"uses" one component outright;
 the hard label is `argmax_q |v[s,q]|`. The bar chart reports both how many spikes each
 component dominates and its share of `Σv²`, because the two can disagree. The scatters
 below colour every spike by its dominant component.
