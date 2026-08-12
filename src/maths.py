@@ -7,17 +7,18 @@ the spike source to the recording channel.
 
         Y_c^s = a(X^c, C^s) * b^s        (a: amplitude scalar, b: shape row)
 
-Each spike is reconstructed as one spatial footprint times one temporal cookbook row:
+Each spike is reconstructed as a gained spatial footprint times one temporal cookbook row:
 
-        Y[s, c, t]  ~=  g_s(c) * (Pi_s Omega)_t
+        Y[s, c, t]  ~=  alpha_s g_s(c) * (Pi_s Omega)_t
 
 The spatial part is a single discrete choice out of an implicit 1 um voxel grid
 (one-of-K, no soft mixture). Omega is a Q x T temporal cookbook and each Pi_s is a
 binary one-hot 1 x Q selector. There is no neural network and no gradient descent.
 
-For fixed Omega, the joint spatial/temporal assignment minimizes
+For fixed Omega, the joint spatial/temporal assignment solves alpha_s in closed
+form and minimizes
 
-        ||Y_s - ghat_n Omega_q||_F^2
+        ||Y_s - alpha_s ghat_n Omega_q||_F^2
 
 The assignment is evaluated in candidate and spike chunks so the temporary score
 matrix remains bounded on the GPU.
@@ -312,6 +313,7 @@ def _assign_hard_temporal(
     sites,
     profiles,
     off_cfg,
+    mask_cfg,
     cfg_id,
     M,
     omega,
@@ -319,13 +321,15 @@ def _assign_hard_temporal(
     candidate_block=4096,
     spike_block=512,
 ):
-    """Jointly choose one spatial candidate and one Omega row per spike."""
+    """Jointly choose spatial candidate, Omega row, and closed-form gain."""
     C, Q = M.shape[1:]
     S = len(profiles)
     n_cand = len(sites) * S
     best = torch.full((len(M),), float("-inf"), device=device)
     pick = torch.zeros(len(M), dtype=torch.long, device=device)
     temporal_idx = torch.zeros(len(M), dtype=torch.long, device=device)
+    alpha = torch.zeros(len(M), device=device)
+    omega_energy = omega.square().sum(1).clamp_min(_EPS)
 
     for ic in range(len(off_cfg)):
         rows = np.flatnonzero(cfg_id == ic)
@@ -335,28 +339,37 @@ def _assign_hard_temporal(
             bc = torch.full((len(row),), float("-inf"), device=device)
             kc = torch.zeros(len(row), dtype=torch.long, device=device)
             qc = torch.zeros(len(row), dtype=torch.long, device=device)
+            ac = torch.zeros(len(row), device=device)
             for lo in range(0, n_cand, candidate_block):
                 hi = min(n_cand, lo + candidate_block)
                 s0, s1 = lo // S, (hi + S - 1) // S
                 footprints = torch.empty((s1 - s0, S, C), device=device)
                 for j, (name, params) in enumerate(profiles):
-                    footprints[:, j] = _normalize(
-                        _profile_block(off_cfg[ic], sites[s0:s1], name, params, device)
-                    )
+                    g = _profile_block(
+                        off_cfg[ic], sites[s0:s1], name, params, device)
+                    footprints[:, j] = _normalize(g * mask_cfg[ic][None])
                 footprints = footprints.reshape(-1, C)[lo - s0 * S:hi - s0 * S]
                 response = torch.einsum("kc,bcq->kbq", footprints, Mc)
-                score = 2 * response - omega.square().sum(1)[None, None, :]
-                score = score.permute(1, 0, 2).reshape(len(row), -1)
+                response = response.permute(1, 0, 2).reshape(len(row), -1)
+                score = (
+                    response.reshape(len(row), -1, Q).square()
+                    / omega_energy[None, None]
+                ).reshape(len(row), -1)
                 block_best, flat_idx = score.max(1)
+                block_q = flat_idx % Q
+                block_response = response.gather(1, flat_idx[:, None]).squeeze(1)
+                block_alpha = block_response / omega_energy[block_q]
                 update = block_best > bc
                 bc = torch.where(update, block_best, bc)
                 kc = torch.where(update, lo + flat_idx // Q, kc)
-                qc = torch.where(update, flat_idx % Q, qc)
+                qc = torch.where(update, block_q, qc)
+                ac = torch.where(update, block_alpha, ac)
                 del footprints, response, score
             best[row] = bc
             pick[row] = kc
             temporal_idx[row] = qc
-    return pick, temporal_idx, best
+            alpha[row] = ac
+    return pick, temporal_idx, alpha, best
 
 
 def _assign_from_P(sites, profiles, off_cfg, cfg_id, P, device, ks_block=16384):
@@ -416,7 +429,7 @@ def _assign_from_P(sites, profiles, off_cfg, cfg_id, P, device, ks_block=16384):
     return pick, best
 
 
-def _footprint_per_spike(off_cfg, sites, profiles, k, device):
+def _footprint_per_spike(off_cfg, sites, profiles, k, device, mask_cfg=None):
     """Unit-norm footprint of each spike's OWN chosen candidate. O(C) per spike.
 
     off_cfg: (C, 2) lateral offsets (single shared config in this row grouping).
@@ -431,6 +444,8 @@ def _footprint_per_spike(off_cfg, sites, profiles, k, device):
         sel = prof == j
         nm, pr = profiles[j]
         g[sel] = _profile_block(off_cfg, sites[site[sel]], nm, pr, device)
+    if mask_cfg is not None:
+        g *= mask_cfg[None]
     return _normalize(g)
 
 
@@ -453,26 +468,31 @@ def _basis_scatter(Y, off_cfg, cfg_id, sites, profiles, pick, device):
 
 
 def _refit_omega(
-    Y, off_cfg, cfg_id, sites, profiles, pick, temporal_idx, omega, device,
+    Y, off_cfg, mask_cfg, cfg_id, sites, profiles, pick, temporal_idx, alpha,
+    omega, device,
     spike_block=65536,
 ):
-    """Refit each Omega row as the mean projected waveform assigned to it."""
+    """Refit each Omega row by weighted least squares with gains fixed."""
     Q = len(omega)
     T = Y.shape[2]
     total = torch.zeros((Q, T), device=device)
     count = torch.zeros(Q, device=device)
+    weight = torch.zeros(Q, device=device)
     for ic in range(len(off_cfg)):
         rows = np.flatnonzero(cfg_id == ic)
         for b0 in range(0, len(rows), spike_block):
             row = rows[b0:b0 + spike_block]
-            g = _footprint_per_spike(off_cfg[ic], sites, profiles, pick[row], device)
+            g = _footprint_per_spike(
+                off_cfg[ic], sites, profiles, pick[row], device, mask_cfg[ic])
             projected = torch.einsum("bc,bct->bt", g, Y[row])
             q = temporal_idx[row]
-            total.index_add_(0, q, projected)
+            a = alpha[row]
+            total.index_add_(0, q, a[:, None] * projected)
             count += torch.bincount(q, minlength=Q)
+            weight += torch.bincount(q, weights=a.square(), minlength=Q)
     updated = omega.clone()
-    used = count > 0
-    updated[used] = total[used] / count[used, None]
+    used = weight > _EPS
+    updated[used] = _normalize(total[used] / weight[used, None])
     return updated, count
 
 
@@ -483,9 +503,11 @@ def _refine_sources(
     sites,
     profiles,
     off_cfg,
+    mask_cfg,
     cfg_id,
     pick,
     temporal_idx,
+    alpha,
     best,
     n_sites,
     device,
@@ -519,7 +541,7 @@ def _refine_sources(
         right = axis[(index + 1).clamp_max(n_sites - 1)] - axis[index]
         initial_steps.append(torch.ceil(0.5 * torch.maximum(left, right)))
     step = torch.stack(initial_steps, dim=1).clamp_min(VOXEL_SIZE_UM)
-    omega_norm = omega.square().sum(1)
+    omega_norm = omega.square().sum(1).clamp_min(_EPS)
 
     groups = []
     for config in range(len(off_cfg)):
@@ -543,21 +565,29 @@ def _refine_sources(
                 )
                 dz2 = candidates[:, :, None, 2].square()
                 name, params = profiles[profile]
-                footprints = _normalize(KERNELS[name](dxy2, dz2, params))
+                footprints = KERNELS[name](dxy2, dz2, params)
+                footprints *= mask_cfg[config][None, None]
+                footprints = _normalize(footprints)
                 response = torch.einsum("blc,bcq->blq", footprints, M[row])
-                score = 2 * response - omega_norm[None, None, :]
-                block_best, flat = score.reshape(len(row), -1).max(1)
+                response = response.reshape(len(row), -1)
+                score = (
+                    response.reshape(len(row), -1, M.shape[2]).square()
+                    / omega_norm[None, None]
+                ).reshape(len(row), -1)
+                block_best, flat = score.max(1)
                 local_idx = flat // M.shape[2]
                 q = flat % M.shape[2]
+                selected_response = response.gather(1, flat[:, None]).squeeze(1)
                 updated = candidates[torch.arange(len(row), device=device), local_idx]
                 current[row] = updated
                 temporal_idx[row] = q
+                alpha[row] = selected_response / omega_norm[q]
                 best[row] = block_best
                 levels[row] += 1
         if bool((step == VOXEL_SIZE_UM).all()):
             break
         step = torch.floor(step / 2).clamp_min(VOXEL_SIZE_UM)
-    return current, coarse, temporal_idx, best, levels
+    return current, coarse, temporal_idx, alpha, best, levels
 
 
 # --------------------------------------------------------------------------- #
@@ -575,17 +605,19 @@ def fit_spike_model(
     refine_levels=6,
     refine_stop_um=3.0,
     device=None,
+    mask=None,
 ):
     """Alternating minimization with hard spatial and temporal selections.
 
-    Omega is a Q x T temporal cookbook. Each spike chooses one spatial candidate
-    and has a binary one-hot selector Pi_s over Omega:
-        min sum_s || Y_s - g_s (Pi_s Omega) ||_F^2
+    Omega is a Q x T temporal cookbook. Each spike chooses one spatial candidate,
+    a binary one-hot selector Pi_s, and a closed-form scalar alpha_s:
+        min sum_s || Y_s - alpha_s g_s (Pi_s Omega) ||_F^2
     Both blocks are exact, so the loss is monotone non-increasing.
 
     Args:
         off: (N, C, 2) lateral channel offsets relative to each spike's anchor.
         Y: (N, C, T) waveforms.
+        mask: (N, C) True for real channels and False for padding.
         Q: number of rows in Omega; Pi selects exactly one per spike.
         kernels: profile families in the dictionary.
         n_scales: sigmas per isotropic family.
@@ -612,18 +644,34 @@ def fit_spike_model(
     # config grouping in numpy (torch has no unique over rows cheaply)
     off_np = np.asarray(off.cpu().numpy() if torch.is_tensor(off) else off)
     Y_np = np.asarray(Y.cpu().numpy() if torch.is_tensor(Y) else Y)
-    cfg_u, cfg_id = np.unique(off_np.reshape(N, -1), axis=0, return_inverse=True)
-    off_cfg = torch.as_tensor(cfg_u.reshape(-1, C, 2), dtype=torch.float32, device=device)
+    if mask is None:
+        mask_np = np.ones((N, C), dtype=bool)
+    else:
+        mask_np = np.asarray(
+            mask.cpu().numpy() if torch.is_tensor(mask) else mask, dtype=bool)
+        if mask_np.shape != (N, C):
+            raise ValueError(f"mask must have shape {(N, C)}, got {mask_np.shape}")
+    cfg_rows = np.concatenate(
+        (off_np.reshape(N, -1), mask_np.astype(np.float32)), axis=1)
+    cfg_u, cfg_id = np.unique(cfg_rows, axis=0, return_inverse=True)
+    off_cfg = torch.as_tensor(
+        cfg_u[:, :2 * C].reshape(-1, C, 2), dtype=torch.float32, device=device)
+    mask_cfg = torch.as_tensor(
+        cfg_u[:, 2 * C:], dtype=torch.float32, device=device)
     Yt = torch.as_tensor(Y_np, dtype=torch.float32, device=device)
+    mask_t = torch.as_tensor(mask_np, dtype=torch.bool, device=device)
+    Yt = Yt.masked_fill(~mask_t[:, :, None], 0)
 
     # Initialize Omega from real high-energy-channel spike waveforms.
     F = Y_np.reshape(-1, T) - Y_np.reshape(-1, T).mean(-1, keepdims=True)
     per_spike = F.reshape(N, C, T)
+    per_spike[~mask_np] = 0
     strongest = np.square(per_spike).sum(2).argmax(1)
     representative = per_spike[np.arange(N), strongest]
     rng = np.random.default_rng(0)
     init_rows = rng.choice(N, Q, replace=N < Q)
-    omega = torch.as_tensor(representative[init_rows], dtype=torch.float32, device=device)
+    omega = _normalize(torch.as_tensor(
+        representative[init_rows], dtype=torch.float32, device=device))
 
     var = float(np.mean(F ** 2))
     hist, prev = [], np.inf
@@ -632,13 +680,14 @@ def fit_spike_model(
         omega_final = omega
         M = torch.einsum("nct,tq->ncq", Yt, omega.T)
         y2 = (Yt * Yt).sum((1, 2))
-        pick, temporal_idx, best = _assign_hard_temporal(
-            sites, profiles, off_cfg, cfg_id, M, omega, device
+        pick, temporal_idx, alpha, best = _assign_hard_temporal(
+            sites, profiles, off_cfg, mask_cfg, cfg_id, M, omega, device
         )
         del M
         nmse = float((y2 - best).mean().item() / (C * T) / var)
         updated, temporal_count = _refit_omega(
-            Yt, off_cfg, cfg_id, sites, profiles, pick, temporal_idx, omega, device
+            Yt, off_cfg, mask_cfg, cfg_id, sites, profiles, pick, temporal_idx,
+            alpha, omega, device
         )
         hist.append({"step": it, "nmse": nmse,
                      "used": int(len(torch.unique(pick))),
@@ -652,9 +701,9 @@ def fit_spike_model(
         omega = updated
 
     M = torch.einsum("nct,tq->ncq", Yt, omega_final.T)
-    refined, coarse, temporal_idx, best, refinement_levels = _refine_sources(
-        Yt, M, omega_final, sites, profiles, off_cfg, cfg_id, pick,
-        temporal_idx, best, n_sites, device, max_levels=refine_levels,
+    refined, coarse, temporal_idx, alpha, best, refinement_levels = _refine_sources(
+        Yt, M, omega_final, sites, profiles, off_cfg, mask_cfg, cfg_id, pick,
+        temporal_idx, alpha, best, n_sites, device, max_levels=refine_levels,
     )
     del M
     nmse_coarse = nmse
@@ -675,6 +724,7 @@ def fit_spike_model(
 
     one_hot = np.zeros((N, Q), np.uint8)
     temporal_idx_np = temporal_idx.to(device_cpu).numpy()
+    alpha_np = alpha.to(device_cpu).numpy()
     one_hot[np.arange(N), temporal_idx_np] = 1
     return {
         "pick": pick,
@@ -693,9 +743,10 @@ def fit_spike_model(
         "omega": omega_final.to("cpu").numpy(),
         "a": omega_final.to("cpu").numpy(),
         "pi": one_hot,
+        "alpha": alpha_np,
         "temporal_idx": temporal_idx_np,
         "temporal_one_hot": one_hot,
-        "v": one_hot,
+        "v": alpha_np[:, None] * one_hot,
         "nmse": nmse,
         "nmse_coarse": nmse_coarse,
         "history": hist,
@@ -777,7 +828,8 @@ def _predict_waveform(off_row, res, k, device="cpu"):
     g = _normalize(_profile_block(off_t, sites, nm, pr, dev))[0]
     q = int(res["temporal_idx"][0])
     shape = torch.as_tensor(res["omega"][q], device=dev)
-    return torch.outer(g, shape).cpu().numpy()
+    alpha = float(res.get("alpha", np.ones(1))[0])
+    return (alpha * torch.outer(g, shape)).cpu().numpy()
 
 
 # --------------------------------------------------------------------------- #

@@ -22,8 +22,8 @@ def main():
     parser.add_argument("--refine-stop-um", type=float, default=3.0)
     args = parser.parse_args()
 
-    Y, off, _, _ = load_session(args.session_path)
-    print(f"loaded Y={Y.shape}, off={off.shape}", flush=True)
+    Y, off, mask, _ = load_session(args.session_path)
+    print(f"loaded Y={Y.shape}, off={off.shape}, valid={mask.sum()}", flush=True)
     fit = fit_spike_model(
         off,
         Y,
@@ -36,6 +36,7 @@ def main():
         refine_levels=args.refine_levels,
         refine_stop_um=args.refine_stop_um,
         device=args.device,
+        mask=mask,
     )
     args.result_path.parent.mkdir(parents=True, exist_ok=True)
     np.savez_compressed(
@@ -54,6 +55,7 @@ def main():
         sigma=fit["sigma"],
         a=fit["a"],
         omega=fit["omega"],
+        alpha=fit["alpha"],
         pi=fit["pi"],
         v=fit["v"],
         temporal_idx=fit["temporal_idx"],

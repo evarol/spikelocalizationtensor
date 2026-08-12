@@ -64,6 +64,26 @@ def main():
     ax[1].set(xlabel="profile index", ylabel="spikes", title="profile usage")
     fig.savefig(args.out / "codebook_usage.png", dpi=800)
     plt.close(fig)
+
+    if "alpha" in fit:
+        alpha = np.asarray(fit["alpha"])
+        magnitude = np.abs(alpha)
+        positive = magnitude[magnitude > 0]
+        fig, ax = plt.subplots(1, 2, figsize=(11, 4), constrained_layout=True)
+        if len(positive):
+            ax[0].hist(np.log10(positive), bins=60, color="#3182bd")
+        ax[0].set(xlabel=r"log10 $|\alpha_s|$", ylabel="spikes",
+                  title="closed-form spike gains")
+        q = np.asarray(fit["temporal_idx"])
+        medians = [
+            np.median(magnitude[q == i]) if np.any(q == i) else 0
+            for i in range(len(fit["omega"]))
+        ]
+        ax[1].bar(np.arange(len(medians)), medians, color="#756bb1")
+        ax[1].set(xlabel="temporal row", ylabel=r"median $|\alpha_s|$",
+                  title="gain by temporal code")
+        fig.savefig(args.out / "gain_usage.png", dpi=800)
+        plt.close(fig)
     print(f"wrote plots to {args.out}")
 
 
