@@ -1,7 +1,6 @@
-"""Plot probe-global localization grids for kernels and reference fits."""
+"""Plot probe-global localization grids for all kernels and the monopolar reference."""
 
 import argparse
-import json
 from pathlib import Path
 
 import matplotlib
@@ -53,22 +52,6 @@ def monopolar_localizations(path):
     }
 
 
-def continuous_localizations(path):
-    with np.load(path) as values:
-        locations = np.asarray(values["localizations_continuous"])
-    with path.with_suffix(".json").open() as stream:
-        summary = json.load(stream)
-    return {
-        "x": locations[:, 0],
-        "y": locations[:, 1],
-        "z": locations[:, 2],
-        "title": (
-            "monopole continuous · nMSE "
-            f"{summary['nmse_continuous_for_processed_spikes']:.4f}"
-        ),
-    }
-
-
 def limits(methods, coordinate):
     values = np.concatenate([method[coordinate] for method in methods])
     values = values[np.isfinite(values)]
@@ -81,7 +64,6 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--session", type=Path, required=True)
     ap.add_argument("--monopole", type=Path, required=True)
-    ap.add_argument("--continuous", type=Path)
     ap.add_argument("--out", type=Path, required=True)
     ap.add_argument("--masked", action="store_true")
     args = ap.parse_args()
@@ -96,8 +78,6 @@ def main():
     methods = [analytic_localizations(args.session, kernel, centroids, args.masked)
                for kernel in KERNELS]
     methods.append(monopolar_localizations(args.monopole))
-    if args.continuous is not None:
-        methods.append(continuous_localizations(args.continuous))
     axis_limits = {coordinate: limits(methods, coordinate)
                    for coordinate in ("x", "y", "z")}
 
@@ -125,8 +105,7 @@ def main():
             axis.set_title(method["title"], fontsize=10, loc="left")
             axis.set_facecolor("white")
             axis.spines[["top", "right"]].set_visible(False)
-        for axis in axes.flat[len(methods):]:
-            axis.axis("off")
+        axes.flat[-1].axis("off")
         for axis in axes[-1, :]:
             axis.set_xlabel(LABELS[horizontal])
         for axis in axes[:, 0]:

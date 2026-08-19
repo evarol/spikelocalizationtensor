@@ -37,6 +37,16 @@ def load_monopole(path):
     }
 
 
+def load_continuous(path):
+    with np.load(path) as values:
+        locations = np.asarray(values["localizations_continuous"])
+    return {
+        "x": locations[:, 0],
+        "y": locations[:, 1],
+        "z": locations[:, 2],
+    }
+
+
 def shared_limits(analytic, monopole):
     limits = {}
     for coordinate in ("x", "y", "z"):
@@ -80,27 +90,51 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--session", type=Path, required=True)
     parser.add_argument("--fit", type=Path, required=True)
-    parser.add_argument("--monopole", type=Path, required=True)
+    comparison = parser.add_mutually_exclusive_group(required=True)
+    comparison.add_argument("--monopole", type=Path)
+    comparison.add_argument("--continuous", type=Path)
     parser.add_argument("--out", type=Path,
                         default=Path("out/plots/gpu_fit/projections"))
     args = parser.parse_args()
 
     analytic = load_analytic(args.session, args.fit)
-    monopole = load_monopole(args.monopole)
-    limits = shared_limits(analytic, monopole)
+    if args.continuous is None:
+        reference = load_monopole(args.monopole)
+        single = analytic
+        single_title = "Analytic SLT"
+        left_title = "Analytic SLT"
+        right_title = "Monopolar"
+        comparison_name = "compare_monopole"
+        comparison_title = "probe-global localizations"
+    else:
+        reference = load_continuous(args.continuous)
+        single = reference
+        single_title = "Monopole · continuous"
+        left_title = "Monopole · 1 µm grid"
+        right_title = "Monopole · continuous"
+        comparison_name = "compare_grid_continuous"
+        comparison_title = "masked monopole grid versus continuous"
+    limits = shared_limits(analytic, reference)
     args.out.mkdir(parents=True, exist_ok=True)
 
     for horizontal, vertical, label in PROJECTIONS:
         analytic_image, x_edges, y_edges = histogram(
             analytic, horizontal, vertical, limits)
-        monopole_image, mono_x, mono_y = histogram(
-            monopole, horizontal, vertical, limits)
-        vmax = max(float(analytic_image.max()), float(monopole_image.max()))
+        reference_image, reference_x, reference_y = histogram(
+            reference, horizontal, vertical, limits)
+        vmax = max(float(analytic_image.max()), float(reference_image.max()))
+
+        if single is analytic:
+            single_image, single_x, single_y = analytic_image, x_edges, y_edges
+        else:
+            single_image = reference_image
+            single_x, single_y = reference_x, reference_y
 
         figure, axis = plt.subplots(
             figsize=figure_size(horizontal, vertical, 1), constrained_layout=True)
-        artist = panel(axis, analytic_image, x_edges, y_edges, horizontal, vertical,
-                       f"Analytic SLT — {label.upper()}", vmax)
+        artist = panel(
+            axis, single_image, single_x, single_y, horizontal, vertical,
+            f"{single_title} — {label.upper()}", vmax)
         colorbar = figure.colorbar(artist, ax=axis, pad=0.01, shrink=0.8)
         colorbar.set_label("log(1 + spike count per bin)")
         figure.suptitle(
@@ -114,15 +148,15 @@ def main():
             1, 2, figsize=figure_size(horizontal, vertical, 2),
             constrained_layout=True)
         artist = panel(axes[0], analytic_image, x_edges, y_edges,
-                       horizontal, vertical, "Analytic SLT", vmax)
-        panel(axes[1], monopole_image, mono_x, mono_y,
-              horizontal, vertical, "Monopolar", vmax)
+                       horizontal, vertical, left_title, vmax)
+        panel(axes[1], reference_image, reference_x, reference_y,
+              horizontal, vertical, right_title, vmax)
         colorbar = figure.colorbar(artist, ax=axes, pad=0.01, shrink=0.8)
         colorbar.set_label("log(1 + spike count per bin)")
         figure.suptitle(
-            f"dataset1_p1 probe-global {label.upper()} localizations",
+            f"dataset1_p1 {comparison_title} · {label.upper()}",
             fontsize=13)
-        output = args.out / f"compare_monopole_{label}.png"
+        output = args.out / f"{comparison_name}_{label}.png"
         figure.savefig(output, dpi=800)
         plt.close(figure)
         print(f"saved {label.upper()} histogram and comparison", flush=True)
