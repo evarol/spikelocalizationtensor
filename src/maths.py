@@ -11,9 +11,11 @@ Each spike is reconstructed as a gained spatial footprint times one temporal coo
 
         Y[s, c, t]  ~=  alpha_s g_s(c) * (Pi_s Omega)_t
 
-The spatial part is a single discrete choice out of an implicit 1 um voxel grid
-(one-of-K, no soft mixture). Omega is a Q x T temporal cookbook and each Pi_s is a
-binary one-hot 1 x Q selector. There is no neural network and no gradient descent.
+The spatial part is a single discrete choice (one-of-K, no soft mixture). The
+alternating solve searches a coarse subset of an implicit 1 um voxel grid, then
+performs a final hierarchical local refinement. Omega is a Q x T temporal
+cookbook and each Pi_s is a binary one-hot 1 x Q selector. There is no neural
+network and no gradient descent.
 
 For fixed Omega, the joint spatial/temporal assignment solves alpha_s in closed
 form and minimizes
@@ -38,8 +40,8 @@ _EPS = 1e-12
 # Spatial amplitude profiles (kernels).
 # Every kernel maps separately the squared LATERAL (in-plane) and AXIAL (depth)
 # offsets, dxy2 and dz2, so anisotropic forms share a signature with radial ones.
-# All are peak-normalized to 1 at d=0; the absolute scale is free because the
-# candidate score is normalized by ||g||.            (freed from the alpha/d
+# Their absolute scale is free because the candidate score is normalized by
+# ||g||.                                               (freed from the alpha/d
 # blow-up of the original monopole, which needed a noise floor.)
 # --------------------------------------------------------------------------- #
 def _k_monopole(dxy2, dz2, p):
@@ -612,7 +614,9 @@ def fit_spike_model(
     Omega is a Q x T temporal cookbook. Each spike chooses one spatial candidate,
     a binary one-hot selector Pi_s, and a closed-form scalar alpha_s:
         min sum_s || Y_s - alpha_s g_s (Pi_s Omega) ||_F^2
-    Both blocks are exact, so the loss is monotone non-increasing.
+    The assignment is exact over the materialized coarse candidates and the
+    temporal update is exact for fixed assignments, so the coarse loss is
+    monotone non-increasing up to floating-point error.
 
     Args:
         off: (N, C, 2) lateral channel offsets relative to each spike's anchor.
@@ -626,12 +630,13 @@ def fit_spike_model(
         tol: stop when normalized nMSE gain < tol.
         refine_levels: maximum shrinking 3x3x3 local-grid refinements; the
             default reaches the 1 um neighborhood from the default coarse grid.
-        refine_stop_um: retained for command-line compatibility; refinement now
-            always reaches the 1 um voxel level.
+        refine_stop_um: retained for command-line compatibility. With enough
+            refinement levels, the local search evaluates a 1 um step.
         device: torch device; defaults to cuda if available else cpu.
 
     Returns:
-        dict with pick, sources (site coords), sigma per spike, basis a, scores.
+        dict with explicit coarse and refined candidate identifiers, source
+        coordinates, profile parameters, temporal cookbook, and scores.
     """
     if device is None:
         device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -710,9 +715,9 @@ def fit_spike_model(
     nmse = float((y2 - best).mean().item() / (C * T) / var)
 
     device_cpu = torch.device("cpu")
-    pick = pick.to(device_cpu).numpy()
-    site_idx = pick // ns_prof
-    profile_idx = pick % ns_prof
+    coarse_pick = pick.to(device_cpu).numpy()
+    coarse_site_idx = coarse_pick // ns_prof
+    profile_idx = coarse_pick % ns_prof
     pole_source = refined.to(device_cpu).numpy().astype(np.float64)
     coarse_source = coarse.to(device_cpu).numpy().astype(np.float64)
     voxel_coordinates = np.rint(pole_source).astype(np.int16)
@@ -721,14 +726,19 @@ def fit_spike_model(
     voxel_shape = np.subtract(VOXEL_HI, VOXEL_LO) + 1
     voxel_offset = voxel_coordinates.astype(np.int32) - np.asarray(VOXEL_LO)
     voxel_idx = np.ravel_multi_index(voxel_offset.T, voxel_shape)
+    refined_pick = (
+        voxel_idx.astype(np.int64) * ns_prof + profile_idx.astype(np.int64))
 
     one_hot = np.zeros((N, Q), np.uint8)
     temporal_idx_np = temporal_idx.to(device_cpu).numpy()
     alpha_np = alpha.to(device_cpu).numpy()
     one_hot[np.arange(N), temporal_idx_np] = 1
     return {
-        "pick": pick,
-        "site_idx": site_idx,
+        "pick": coarse_pick,
+        "site_idx": coarse_site_idx,
+        "coarse_pick": coarse_pick,
+        "coarse_site_idx": coarse_site_idx,
+        "refined_pick": refined_pick,
         "profile_idx": profile_idx,
         "sources": pole_source,
         "voxel_coordinates": voxel_coordinates,
@@ -796,7 +806,7 @@ def greedy_matching_pursuit(
             res = fit_spike_model(off[s:s + 1], y, Q=Q, kernels=kernels,
                                   n_scales=n_scales, n_sites=n_sites, n_iters=5,
                                   device=device)
-            pj = res["pick"][0]
+            pj = res["refined_pick"][0]
             pred = _predict_waveform(off[s], res, pj)           # (C, T)
             yE = float(np.sum(y * y))
             gain = yE - float(np.sum((y[0] - pred) ** 2))
@@ -817,13 +827,13 @@ def greedy_matching_pursuit(
 
 
 def _predict_waveform(off_row, res, k, device="cpu"):
-    """Reconstruct one hard spatial selection times one Omega cookbook row."""
+    """Reconstruct a one-spike fit at its refined source location."""
     dev = torch.device(device if torch.cuda.is_available() else "cpu")
     S = len(res["profiles"])
-    site = k // S
     prof = k % S
     nm, pr = res["profiles"][prof]
-    sites = torch.as_tensor(res["lattice"][[site]], device=dev)
+    sites = torch.as_tensor(
+        np.asarray(res["sources"][[0]]), dtype=torch.float32, device=dev)
     off_t = torch.as_tensor(np.asarray(off_row), dtype=torch.float32, device=dev)
     g = _normalize(_profile_block(off_t, sites, nm, pr, dev))[0]
     q = int(res["temporal_idx"][0])
