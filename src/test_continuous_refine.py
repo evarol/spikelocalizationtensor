@@ -8,7 +8,7 @@ import numpy as np
 import torch
 
 from continuous_refine import (
-    _batched_eigh,
+    _symmetric_eigvalsh_3x3,
     curvature_width,
     monopole_profile,
     refine_batch,
@@ -129,18 +129,16 @@ class TestMaskedObjective(unittest.TestCase):
             torch.testing.assert_close(
                 hessian[:, dimension], row, rtol=1e-10, atol=1e-12)
 
-    def test_eigh_sub_batches_match_direct_decomposition(self):
+    def test_closed_form_eigenvalues_match_torch(self):
         matrices = self.form[:, :3, :3]
-        expected_values, expected_vectors = torch.linalg.eigh(matrices)
-        values, vectors = _batched_eigh(matrices, batch_size=5)
+        expected_values = torch.linalg.eigvalsh(matrices)
+        values = _symmetric_eigvalsh_3x3(matrices)
         torch.testing.assert_close(values, expected_values)
-        reconstructed = vectors @ torch.diag_embed(values) @ vectors.transpose(1, 2)
-        expected = (
-            expected_vectors
-            @ torch.diag_embed(expected_values)
-            @ expected_vectors.transpose(1, 2)
+        repeated = torch.eye(3, dtype=DTYPE).repeat(4, 1, 1) * 7.0
+        torch.testing.assert_close(
+            _symmetric_eigvalsh_3x3(repeated),
+            torch.full((4, 3), 7.0, dtype=DTYPE),
         )
-        torch.testing.assert_close(reconstructed, expected)
 
 
 class TestRefinement(unittest.TestCase):

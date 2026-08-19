@@ -92,7 +92,6 @@ def main():
     parser.add_argument("--spike-chunk", type=int, default=131_072)
     parser.add_argument("--max-iterations", type=int, default=80)
     parser.add_argument("--backtracks", type=int, default=30)
-    parser.add_argument("--eigh-batch-size", type=int, default=32_768)
     parser.add_argument("--drop", type=float, default=0.01)
     parser.add_argument("--max-spikes", type=int)
     args = parser.parse_args()
@@ -200,7 +199,6 @@ def main():
             mask=mask,
             max_iterations=args.max_iterations,
             backtracks=args.backtracks,
-            eigh_batch_size=args.eigh_batch_size,
         )
         values, width = curvature_width(hessian, value, args.drop)
         footprint, _, _ = monopole_profile(offsets, mu, sigma, mask)

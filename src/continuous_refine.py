@@ -4,9 +4,8 @@ The discrete fit supplies a final 1 um voxel, monopole scale, temporal row, and
 temporal cookbook for each spike. This module keeps every fitted quantity fixed
 and maximizes only the gain-eliminated spatial score inside that voxel.
 
-The active-set projected Newton update follows the continuous-refinement branch
-in UnitMatch/SLT/Basic_implementation, adapted here to padded channel masks and
-our hard temporal-row objective.
+The final step uses projected gradient ascent, adapted to padded channel masks
+and our hard temporal-row objective.
 """
 
 from __future__ import annotations
@@ -106,6 +105,25 @@ def score_gradient_hessian(form, offsets, mu, sigma, mask=None):
     return value, gradient, hessian
 
 
+def score_gradient(form, offsets, mu, sigma, mask=None):
+    """Return the score and analytic xyz gradient without forming a Hessian."""
+    footprint, displacement, quotient = monopole_profile(
+        offsets, mu, sigma, mask)
+    jacobian = quotient[:, :, None] * displacement
+    product = torch.einsum("nij,nj->ni", form, footprint)
+    numerator = (footprint * product).sum(dim=1)
+    denominator = (footprint * footprint).sum(dim=1)
+    value = numerator / denominator
+    grad_numerator = 2.0 * torch.einsum(
+        "nci,nc->ni", jacobian, product)
+    grad_denominator = 2.0 * torch.einsum(
+        "nci,nc->ni", jacobian, footprint)
+    gradient = (
+        grad_numerator - value[:, None] * grad_denominator
+    ) / denominator[:, None]
+    return value, gradient
+
+
 def _line_search(
     form,
     offsets,
@@ -138,26 +156,6 @@ def _line_search(
     return mu, value, moved
 
 
-def _batched_eigh(matrices, batch_size):
-    """Run symmetric eigendecomposition without exceeding cuSOLVER batch limits."""
-    if batch_size <= 0:
-        raise ValueError(f"eigh batch size must be positive, got {batch_size}")
-    finite = torch.isfinite(matrices)
-    if not bool(finite.all()):
-        count = int((~finite).sum().item())
-        raise FloatingPointError(
-            f"continuous-refinement Hessian contains {count} non-finite values")
-    eigenvalues = torch.empty(
-        matrices.shape[:-1], dtype=matrices.dtype, device=matrices.device)
-    eigenvectors = torch.empty_like(matrices)
-    for start in range(0, len(matrices), batch_size):
-        stop = min(start + batch_size, len(matrices))
-        values, vectors = torch.linalg.eigh(matrices[start:stop])
-        eigenvalues[start:stop] = values
-        eigenvectors[start:stop] = vectors
-    return eigenvalues, eigenvectors
-
-
 def refine_batch(
     form,
     offsets,
@@ -168,11 +166,9 @@ def refine_batch(
     mask=None,
     max_iterations=80,
     backtracks=30,
-    eigh_batch_size=32_768,
 ):
-    """Maximize the continuous score by active-set projected Newton steps."""
+    """Maximize the continuous score by projected gradient ascent."""
     mu = mu_grid.clone()
-    eye = torch.eye(3, dtype=mu.dtype, device=mu.device)
     live = torch.arange(len(mu), device=mu.device)
 
     for _ in range(max_iterations):
@@ -188,7 +184,7 @@ def refine_batch(
         span = (sub_upper - sub_lower).clamp_min(1e-12)
         edge = 1e-12 * span
 
-        value, gradient, hessian = score_gradient_hessian(
+        value, gradient = score_gradient(
             sub_form, sub_offsets, sub_mu, sub_sigma, sub_mask)
         frozen = (
             ((sub_mu <= sub_lower + edge) & (gradient < 0))
@@ -196,24 +192,10 @@ def refine_batch(
         )
         free_gradient = gradient.masked_fill(frozen, 0.0)
 
-        keep = (~frozen).to(mu.dtype)
-        reduced = hessian * keep[:, :, None] * keep[:, None, :]
-        reduced = reduced - (1.0 - keep)[:, :, None] * eye
-        eigenvalues, eigenvectors = _batched_eigh(
-            reduced, eigh_batch_size)
-        floor = 1e-6 * eigenvalues.abs().amax(
+        direction = free_gradient * span
+        reach = (direction / span).norm(
             dim=1, keepdim=True).clamp_min(1e-30)
-        magnitude = eigenvalues.abs().clamp_min(floor)
-        newton = torch.einsum(
-            "nij,nj->ni",
-            eigenvectors,
-            torch.einsum(
-                "nji,nj->ni", eigenvectors, free_gradient
-            ) / magnitude,
-        )
-        newton = newton.masked_fill(frozen, 0.0)
-        reach = (newton / span).norm(dim=1, keepdim=True).clamp_min(1e-30)
-        newton = newton * (1.0 / reach).clamp_max(1.0)
+        direction = direction / reach
 
         pending = torch.ones(len(live), dtype=torch.bool, device=mu.device)
         sub_mu, value, moved = _line_search(
@@ -224,34 +206,12 @@ def refine_batch(
             sub_mu,
             value,
             gradient,
-            newton,
+            direction,
             sub_lower,
             sub_upper,
             pending,
             backtracks,
         )
-
-        retry = ~moved
-        if bool(retry.any()):
-            ascent = free_gradient * span
-            reach = (ascent / span).norm(
-                dim=1, keepdim=True).clamp_min(1e-30)
-            ascent = ascent / reach
-            sub_mu, value, second = _line_search(
-                sub_form,
-                sub_offsets,
-                sub_sigma,
-                sub_mask,
-                sub_mu,
-                value,
-                gradient,
-                ascent,
-                sub_lower,
-                sub_upper,
-                retry,
-                backtracks,
-            )
-            moved |= second
 
         mu[live] = sub_mu
         live = live[moved]
@@ -261,9 +221,43 @@ def refine_batch(
     return mu, value, gradient, hessian
 
 
+def _symmetric_eigvalsh_3x3(matrix):
+    """Closed-form eigenvalues of real symmetric 3x3 matrices."""
+    diagonal = torch.diagonal(matrix, dim1=1, dim2=2)
+    center = diagonal.mean(dim=1)
+    a00 = matrix[:, 0, 0] - center
+    a11 = matrix[:, 1, 1] - center
+    a22 = matrix[:, 2, 2] - center
+    a01 = matrix[:, 0, 1]
+    a02 = matrix[:, 0, 2]
+    a12 = matrix[:, 1, 2]
+    spread2 = (
+        a00.square() + a11.square() + a22.square()
+        + 2.0 * (a01.square() + a02.square() + a12.square())
+    ) / 6.0
+    spread = torch.sqrt(spread2.clamp_min(0.0))
+    repeated = spread2 == 0
+    scale = torch.where(repeated, torch.ones_like(spread), spread)
+    b00, b11, b22 = a00 / scale, a11 / scale, a22 / scale
+    b01, b02, b12 = a01 / scale, a02 / scale, a12 / scale
+    determinant = (
+        b00 * (b11 * b22 - b12.square())
+        - b01 * (b01 * b22 - b12 * b02)
+        + b02 * (b01 * b12 - b11 * b02)
+    )
+    angle = torch.acos((0.5 * determinant).clamp(-1.0, 1.0)) / 3.0
+    largest = center + 2.0 * spread * torch.cos(angle)
+    smallest = center + 2.0 * spread * torch.cos(
+        angle + 2.0 * torch.pi / 3.0)
+    middle = 3.0 * center - largest - smallest
+    values = torch.sort(
+        torch.stack((smallest, middle, largest), dim=1), dim=1).values
+    return torch.where(repeated[:, None], center[:, None], values)
+
+
 def curvature_width(hessian, value, drop=0.01):
     """Return Hessian eigenvalues and the displacement costing `drop` energy."""
-    eigenvalues = torch.linalg.eigvalsh(hessian)
+    eigenvalues = _symmetric_eigvalsh_3x3(hessian)
     magnitude = eigenvalues.abs().clamp_min(1e-30)
     width = torch.sqrt(
         2.0 * drop * value[:, None].clamp_min(0.0) / magnitude)

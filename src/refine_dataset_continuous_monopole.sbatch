@@ -34,7 +34,6 @@ singularity exec --nv --overlay /scratch/${USER}/_ENVS/pytorch.ext3:ro \
     /share/apps/images/cuda12.8.1-cudnn9.8.0-ubuntu24.04.2.sif \
     /bin/bash -c "source /ext3/env.sh && cd $ROOT && python \
         src/refine_dataset_continuous.py $SESSION $FIT $RESULT \
-        --kernel monopole --device cuda --spike-chunk 131072 \
-        --eigh-batch-size 32768"
+        --kernel monopole --device cuda --spike-chunk 131072"
 
 echo "Completed: $(date)"
