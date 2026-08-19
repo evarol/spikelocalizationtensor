@@ -138,6 +138,26 @@ def _line_search(
     return mu, value, moved
 
 
+def _batched_eigh(matrices, batch_size):
+    """Run symmetric eigendecomposition without exceeding cuSOLVER batch limits."""
+    if batch_size <= 0:
+        raise ValueError(f"eigh batch size must be positive, got {batch_size}")
+    finite = torch.isfinite(matrices)
+    if not bool(finite.all()):
+        count = int((~finite).sum().item())
+        raise FloatingPointError(
+            f"continuous-refinement Hessian contains {count} non-finite values")
+    eigenvalues = torch.empty(
+        matrices.shape[:-1], dtype=matrices.dtype, device=matrices.device)
+    eigenvectors = torch.empty_like(matrices)
+    for start in range(0, len(matrices), batch_size):
+        stop = min(start + batch_size, len(matrices))
+        values, vectors = torch.linalg.eigh(matrices[start:stop])
+        eigenvalues[start:stop] = values
+        eigenvectors[start:stop] = vectors
+    return eigenvalues, eigenvectors
+
+
 def refine_batch(
     form,
     offsets,
@@ -148,6 +168,7 @@ def refine_batch(
     mask=None,
     max_iterations=80,
     backtracks=30,
+    eigh_batch_size=32_768,
 ):
     """Maximize the continuous score by active-set projected Newton steps."""
     mu = mu_grid.clone()
@@ -178,7 +199,8 @@ def refine_batch(
         keep = (~frozen).to(mu.dtype)
         reduced = hessian * keep[:, :, None] * keep[:, None, :]
         reduced = reduced - (1.0 - keep)[:, :, None] * eye
-        eigenvalues, eigenvectors = torch.linalg.eigh(reduced)
+        eigenvalues, eigenvectors = _batched_eigh(
+            reduced, eigh_batch_size)
         floor = 1e-6 * eigenvalues.abs().amax(
             dim=1, keepdim=True).clamp_min(1e-30)
         magnitude = eigenvalues.abs().clamp_min(floor)

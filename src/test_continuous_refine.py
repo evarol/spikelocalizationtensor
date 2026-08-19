@@ -8,6 +8,7 @@ import numpy as np
 import torch
 
 from continuous_refine import (
+    _batched_eigh,
     curvature_width,
     monopole_profile,
     refine_batch,
@@ -127,6 +128,19 @@ class TestMaskedObjective(unittest.TestCase):
                 exact_gradient[:, dimension].sum(), mu, retain_graph=True)
             torch.testing.assert_close(
                 hessian[:, dimension], row, rtol=1e-10, atol=1e-12)
+
+    def test_eigh_sub_batches_match_direct_decomposition(self):
+        matrices = self.form[:, :3, :3]
+        expected_values, expected_vectors = torch.linalg.eigh(matrices)
+        values, vectors = _batched_eigh(matrices, batch_size=5)
+        torch.testing.assert_close(values, expected_values)
+        reconstructed = vectors @ torch.diag_embed(values) @ vectors.transpose(1, 2)
+        expected = (
+            expected_vectors
+            @ torch.diag_embed(expected_values)
+            @ expected_vectors.transpose(1, 2)
+        )
+        torch.testing.assert_close(reconstructed, expected)
 
 
 class TestRefinement(unittest.TestCase):
