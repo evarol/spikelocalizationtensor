@@ -322,6 +322,9 @@ def _assign_hard_temporal(
     device,
     candidate_block=4096,
     spike_block=512,
+    config_batch_size=32,
+    footprint_cache=None,
+    config_keys=None,
 ):
     """Jointly choose spatial candidate, Omega row, and closed-form gain."""
     C, Q = M.shape[1:]
@@ -333,44 +336,72 @@ def _assign_hard_temporal(
     alpha = torch.zeros(len(M), device=device)
     omega_energy = omega.square().sum(1).clamp_min(_EPS)
 
+    if config_batch_size < 1:
+        raise ValueError("config_batch_size must be positive")
+    if config_keys is None:
+        config_keys = list(range(len(off_cfg)))
+    cache = {} if footprint_cache is None else footprint_cache
+    work = []
     for ic in range(len(off_cfg)):
+        cache_key = config_keys[ic]
+        if cache_key not in cache:
+            cached = torch.empty((len(sites), S, C), device=device)
+            for j, (name, params) in enumerate(profiles):
+                footprint = _profile_block(off_cfg[ic], sites, name, params, device)
+                cached[:, j] = _normalize(footprint * mask_cfg[ic][None])
+            cache[cache_key] = cached.reshape(n_cand, C)
         rows = np.flatnonzero(cfg_id == ic)
         for b0 in range(0, len(rows), spike_block):
-            row = rows[b0:b0 + spike_block]
-            Mc = M[row]
-            bc = torch.full((len(row),), float("-inf"), device=device)
-            kc = torch.zeros(len(row), dtype=torch.long, device=device)
-            qc = torch.zeros(len(row), dtype=torch.long, device=device)
-            ac = torch.zeros(len(row), device=device)
-            for lo in range(0, n_cand, candidate_block):
-                hi = min(n_cand, lo + candidate_block)
-                s0, s1 = lo // S, (hi + S - 1) // S
-                footprints = torch.empty((s1 - s0, S, C), device=device)
-                for j, (name, params) in enumerate(profiles):
-                    g = _profile_block(
-                        off_cfg[ic], sites[s0:s1], name, params, device)
-                    footprints[:, j] = _normalize(g * mask_cfg[ic][None])
-                footprints = footprints.reshape(-1, C)[lo - s0 * S:hi - s0 * S]
-                response = torch.einsum("kc,bcq->kbq", footprints, Mc)
-                response = response.permute(1, 0, 2).reshape(len(row), -1)
-                score = (
-                    response.reshape(len(row), -1, Q).square()
-                    / omega_energy[None, None]
-                ).reshape(len(row), -1)
-                block_best, flat_idx = score.max(1)
-                block_q = flat_idx % Q
-                block_response = response.gather(1, flat_idx[:, None]).squeeze(1)
-                block_alpha = block_response / omega_energy[block_q]
-                update = block_best > bc
-                bc = torch.where(update, block_best, bc)
-                kc = torch.where(update, lo + flat_idx // Q, kc)
-                qc = torch.where(update, block_q, qc)
-                ac = torch.where(update, block_alpha, ac)
-                del footprints, response, score
-            best[row] = bc
-            pick[row] = kc
-            temporal_idx[row] = qc
-            alpha[row] = ac
+            work.append((ic, rows[b0:b0 + spike_block]))
+
+    for g0 in range(0, len(work), config_batch_size):
+        group = work[g0:g0 + config_batch_size]
+        batch_size = max(len(rows) for _, rows in group)
+        grouped_projection = torch.zeros(
+            (len(group), batch_size, C, Q), dtype=M.dtype, device=device
+        )
+        grouped_best = torch.full(
+            (len(group), batch_size), float("-inf"), device=device
+        )
+        grouped_pick = torch.zeros(
+            (len(group), batch_size), dtype=torch.long, device=device
+        )
+        grouped_temporal = torch.zeros_like(grouped_pick)
+        grouped_alpha = torch.zeros(
+            (len(group), batch_size), dtype=M.dtype, device=device
+        )
+        for group_idx, (_, rows) in enumerate(group):
+            grouped_projection[group_idx, :len(rows)] = M[rows]
+
+        for lo in range(0, n_cand, candidate_block):
+            hi = min(n_cand, lo + candidate_block)
+            footprints = torch.stack(
+                [cache[config_keys[ic]][lo:hi] for ic, _ in group]
+            )
+            response = torch.einsum(
+                "gkc,gbcq->gbkq", footprints, grouped_projection
+            )
+            response = response.flatten(2)
+            score = (
+                response.reshape(len(group), batch_size, -1, Q).square()
+                / omega_energy[None, None, None]
+            ).flatten(2)
+            block_best, flat_idx = score.max(2)
+            block_q = flat_idx % Q
+            block_response = response.gather(2, flat_idx[..., None]).squeeze(2)
+            block_alpha = block_response / omega_energy[block_q]
+            update = block_best > grouped_best
+            grouped_best = torch.where(update, block_best, grouped_best)
+            grouped_pick = torch.where(update, lo + flat_idx // Q, grouped_pick)
+            grouped_temporal = torch.where(update, block_q, grouped_temporal)
+            grouped_alpha = torch.where(update, block_alpha, grouped_alpha)
+
+        for group_idx, (_, rows) in enumerate(group):
+            length = len(rows)
+            best[rows] = grouped_best[group_idx, :length]
+            pick[rows] = grouped_pick[group_idx, :length]
+            temporal_idx[rows] = grouped_temporal[group_idx, :length]
+            alpha[rows] = grouped_alpha[group_idx, :length]
     return pick, temporal_idx, alpha, best
 
 
@@ -592,6 +623,78 @@ def _refine_sources(
     return current, coarse, temporal_idx, alpha, best, levels
 
 
+def _continuous_refine_monopole(
+    off,
+    mask,
+    projected,
+    omega,
+    sources_grid,
+    profiles,
+    profile_idx,
+    temporal_idx,
+    captured_energy_grid,
+    device,
+    max_iterations,
+    backtracks,
+):
+    """Refine fixed monopole fits inside their winning 1 um voxel cells."""
+    from continuous_refine import monopole_profile, refine_batch, voxel_cell_bounds
+
+    selected_profiles = [profiles[index] for index in profile_idx]
+    if any(name != "monopole" for name, _ in selected_profiles):
+        raise ValueError("continuous fixed-codebook refinement supports monopole profiles only")
+
+    dtype = torch.float64
+    n_spikes = len(sources_grid)
+    rows = torch.arange(n_spikes, device=device)
+    selected_projection = projected[rows, :, temporal_idx].to(dtype)
+    omega_energy = omega.square().sum(dim=1)[temporal_idx].to(dtype)
+    form = (
+        selected_projection[:, :, None] * selected_projection[:, None, :]
+        / omega_energy[:, None, None]
+    )
+    offsets = torch.as_tensor(off, dtype=dtype, device=device)
+    mask_t = torch.as_tensor(mask, dtype=dtype, device=device)
+    source_grid_np = sources_grid.to("cpu").numpy().astype(np.float64)
+    lower_np, upper_np = voxel_cell_bounds(
+        source_grid_np, np.asarray((VOXEL_LO, VOXEL_HI)), VOXEL_SIZE_UM
+    )
+    source_grid = torch.as_tensor(source_grid_np, dtype=dtype, device=device)
+    lower = torch.as_tensor(lower_np, dtype=dtype, device=device)
+    upper = torch.as_tensor(upper_np, dtype=dtype, device=device)
+    sigma = torch.as_tensor(
+        [params[0] for _, params in selected_profiles], dtype=dtype, device=device
+    )
+    source, energy, _, _ = refine_batch(
+        form,
+        offsets,
+        source_grid,
+        sigma,
+        lower,
+        upper,
+        mask=mask_t,
+        max_iterations=max_iterations,
+        backtracks=backtracks,
+    )
+    grid_energy = captured_energy_grid.to(dtype)
+    tolerance = 1e-9 * torch.maximum(grid_energy.abs(), torch.ones_like(grid_energy))
+    invalid = ~torch.isfinite(energy) | (energy < grid_energy - tolerance)
+    source = torch.where(invalid[:, None], source_grid, source)
+
+    footprint, _, _ = monopole_profile(offsets, source, sigma, mask_t)
+    footprint /= footprint.norm(dim=1, keepdim=True).clamp_min(_EPS)
+    response = (footprint * selected_projection).sum(dim=1)
+    alpha = response / omega_energy
+    captured_energy = response.square() / omega_energy
+    grid_footprint, _, _ = monopole_profile(offsets, source_grid, sigma, mask_t)
+    grid_footprint /= grid_footprint.norm(dim=1, keepdim=True).clamp_min(_EPS)
+    grid_alpha = (grid_footprint * selected_projection).sum(dim=1) / omega_energy
+    alpha = torch.where(invalid, grid_alpha, alpha)
+    captured_energy = torch.where(invalid, grid_energy, captured_energy)
+    displacement = torch.linalg.vector_norm(source - source_grid, dim=1)
+    return source, alpha, captured_energy, displacement
+
+
 # --------------------------------------------------------------------------- #
 # Main alternating minimization
 # --------------------------------------------------------------------------- #
@@ -765,6 +868,286 @@ def fit_spike_model(
         "n_candidates": int(np.prod(voxel_shape)) * ns_prof,
         "n_coarse_candidates": n_cand,
     }
+
+
+def localize_spikes_fixed_codebook(
+    off,
+    Y,
+    omega,
+    kernels=("monopole",),
+    n_scales=10,
+    n_sites=16,
+    refine_levels=6,
+    continuous=False,
+    continuous_max_iterations=80,
+    continuous_backtracks=30,
+    device=None,
+    mask=None,
+    coarse_footprint_cache=None,
+    config_batch_size=32,
+):
+    """Localize and reconstruct spikes without changing the temporal cookbook."""
+    if device is None:
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+    off_np = np.asarray(off.cpu().numpy() if torch.is_tensor(off) else off)
+    Y_np = np.asarray(Y.cpu().numpy() if torch.is_tensor(Y) else Y)
+    omega_np = np.asarray(
+        omega.cpu().numpy() if torch.is_tensor(omega) else omega,
+        dtype=np.float32,
+    )
+    if Y_np.ndim != 3:
+        raise ValueError(f"Y must have shape (N, C, T), got {Y_np.shape}")
+    N, C, T = Y_np.shape
+    if off_np.shape != (N, C, 2):
+        raise ValueError(f"off must have shape {(N, C, 2)}, got {off_np.shape}")
+    if omega_np.ndim != 2 or omega_np.shape[1] != T:
+        raise ValueError(
+            f"omega must have shape (Q, {T}), got {omega_np.shape}"
+        )
+    if mask is None:
+        mask_np = np.ones((N, C), dtype=bool)
+    else:
+        mask_np = np.asarray(
+            mask.cpu().numpy() if torch.is_tensor(mask) else mask,
+            dtype=bool,
+        )
+        if mask_np.shape != (N, C):
+            raise ValueError(f"mask must have shape {(N, C)}, got {mask_np.shape}")
+
+    sites = lattice(n_sites).to(device)
+    profiles = build_profiles(kernels, n_scales)
+    n_profiles = len(profiles)
+    cfg_rows = np.concatenate(
+        (off_np.reshape(N, -1), mask_np.astype(np.float32)), axis=1
+    )
+    cfg_u, cfg_id = np.unique(cfg_rows, axis=0, return_inverse=True)
+    config_keys = [row.tobytes() for row in cfg_u]
+    off_cfg = torch.as_tensor(
+        cfg_u[:, :2 * C].reshape(-1, C, 2), dtype=torch.float32, device=device
+    )
+    mask_cfg = torch.as_tensor(
+        cfg_u[:, 2 * C:], dtype=torch.float32, device=device
+    )
+    Yt = torch.as_tensor(Y_np, dtype=torch.float32, device=device)
+    mask_t = torch.as_tensor(mask_np, dtype=torch.bool, device=device)
+    Yt.masked_fill_(~mask_t[:, :, None], 0)
+    omega_t = _normalize(torch.as_tensor(omega_np, device=device))
+
+    projected = torch.einsum("nct,tq->ncq", Yt, omega_t.T)
+    input_energy = Yt.square().sum((1, 2))
+    pick, temporal_idx, alpha, captured_energy = _assign_hard_temporal(
+        sites,
+        profiles,
+        off_cfg,
+        mask_cfg,
+        cfg_id,
+        projected,
+        omega_t,
+        device,
+        config_batch_size=config_batch_size,
+        footprint_cache=coarse_footprint_cache,
+        config_keys=config_keys,
+    )
+    refined, coarse, temporal_idx, alpha, captured_energy, levels = _refine_sources(
+        Yt,
+        projected,
+        omega_t,
+        sites,
+        profiles,
+        off_cfg,
+        mask_cfg,
+        cfg_id,
+        pick,
+        temporal_idx,
+        alpha,
+        captured_energy,
+        n_sites,
+        device,
+        max_levels=refine_levels,
+    )
+
+    profile_idx = (pick % n_profiles).to("cpu").numpy()
+    sources_grid = refined.to("cpu").numpy().astype(np.float64)
+    continuous_energy_gain = torch.zeros_like(captured_energy)
+    continuous_displacement = torch.zeros_like(captured_energy)
+    if continuous:
+        source_t, alpha_t, continuous_energy, continuous_displacement = (
+            _continuous_refine_monopole(
+                off_np,
+                mask_np,
+                projected,
+                omega_t,
+                refined,
+                profiles,
+                profile_idx,
+                temporal_idx,
+                captured_energy,
+                device,
+                continuous_max_iterations,
+                continuous_backtracks,
+            )
+        )
+        continuous_energy_gain = continuous_energy - captured_energy
+        captured_energy = continuous_energy
+        alpha = alpha_t
+        sources = source_t.to("cpu").numpy().astype(np.float64)
+    else:
+        sources = sources_grid
+    voxel_coordinates = np.rint(sources_grid).astype(np.int16)
+    voxel_shape = np.subtract(VOXEL_HI, VOXEL_LO) + 1
+    voxel_offset = voxel_coordinates.astype(np.int32) - np.asarray(VOXEL_LO)
+    voxel_idx = np.ravel_multi_index(voxel_offset.T, voxel_shape)
+    refined_pick = voxel_idx.astype(np.int64) * n_profiles + profile_idx
+    temporal_idx_np = temporal_idx.to("cpu").numpy()
+    alpha_np = alpha.to("cpu").numpy()
+    input_energy_np = input_energy.to("cpu").numpy()
+    captured_energy_np = captured_energy.to("cpu").numpy()
+    prediction = reconstruct_spike_fits(
+        off_np,
+        mask_np,
+        sources,
+        profile_idx,
+        omega_t.to("cpu").numpy(),
+        temporal_idx_np,
+        alpha_np,
+        kernels=kernels,
+        n_scales=n_scales,
+        device=device,
+    )
+    return {
+        "coarse_pick": pick.to("cpu").numpy(),
+        "refined_pick": refined_pick,
+        "profile_idx": profile_idx,
+        "sources": sources,
+        "sources_grid": sources_grid,
+        "coarse_sources": coarse.to("cpu").numpy().astype(np.float64),
+        "voxel_coordinates": voxel_coordinates,
+        "voxel_idx": voxel_idx,
+        "voxel_bounds_um": np.asarray((VOXEL_LO, VOXEL_HI), dtype=np.int16),
+        "voxel_size_um": VOXEL_SIZE_UM,
+        "refinement_levels": levels,
+        "continuous_refined": np.full(N, continuous, dtype=bool),
+        "continuous_displacement_um": continuous_displacement.to("cpu").numpy(),
+        "continuous_energy_gain": continuous_energy_gain.to("cpu").numpy(),
+        "sigma": np.asarray(
+            [profiles[index][1][0] for index in profile_idx], dtype=np.float32
+        ),
+        "temporal_idx": temporal_idx_np,
+        "alpha": alpha_np,
+        "omega": omega_t.to("cpu").numpy(),
+        "input_energy": input_energy_np,
+        "captured_energy": captured_energy_np,
+        "residual_energy": np.maximum(input_energy_np - captured_energy_np, 0),
+        "prediction": prediction,
+    }
+
+
+def reconstruct_spike_fits(
+    off,
+    mask,
+    sources,
+    profile_idx,
+    omega,
+    temporal_idx,
+    alpha,
+    kernels=("monopole",),
+    n_scales=10,
+    device=None,
+):
+    """Reconstruct a batch of localized spikes as alpha * g * Omega[q]."""
+    if device is None:
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+    off_np = np.asarray(off, dtype=np.float32)
+    mask_np = np.asarray(mask, dtype=bool)
+    sources_np = np.asarray(sources, dtype=np.float32)
+    profile_idx_np = np.asarray(profile_idx, dtype=np.int64)
+    temporal_idx_np = np.asarray(temporal_idx, dtype=np.int64)
+    alpha_np = np.asarray(alpha, dtype=np.float32)
+    omega_np = np.asarray(omega, dtype=np.float32)
+    N, C, _ = off_np.shape
+    if mask_np.shape != (N, C):
+        raise ValueError(f"mask must have shape {(N, C)}, got {mask_np.shape}")
+    profiles = build_profiles(kernels, n_scales)
+    if np.any((profile_idx_np < 0) | (profile_idx_np >= len(profiles))):
+        raise ValueError("profile_idx contains an index outside the profile table")
+
+    cfg_rows = np.concatenate(
+        (off_np.reshape(N, -1), mask_np.astype(np.float32)), axis=1
+    )
+    cfg_u, cfg_id = np.unique(cfg_rows, axis=0, return_inverse=True)
+    off_cfg = torch.as_tensor(
+        cfg_u[:, :2 * C].reshape(-1, C, 2), dtype=torch.float32, device=device
+    )
+    mask_cfg = torch.as_tensor(
+        cfg_u[:, 2 * C:], dtype=torch.float32, device=device
+    )
+    sources_t = torch.as_tensor(sources_np, device=device)
+    omega_t = torch.as_tensor(omega_np, device=device)
+    prediction = torch.zeros((N, C, omega_np.shape[1]), device=device)
+    for config in range(len(off_cfg)):
+        for profile in range(len(profiles)):
+            rows_np = np.flatnonzero(
+                (cfg_id == config) & (profile_idx_np == profile)
+            )
+            if not len(rows_np):
+                continue
+            rows = torch.as_tensor(rows_np, dtype=torch.long, device=device)
+            name, params = profiles[profile]
+            footprint = _profile_block(
+                off_cfg[config], sources_t[rows], name, params, device
+            )
+            footprint = _normalize(footprint * mask_cfg[config][None])
+            q = torch.as_tensor(
+                temporal_idx_np[rows_np], dtype=torch.long, device=device
+            )
+            gain = torch.as_tensor(alpha_np[rows_np], device=device)
+            prediction[rows] = (
+                gain[:, None, None]
+                * footprint[:, :, None]
+                * omega_t[q, None, :]
+            )
+    return prediction.to("cpu").numpy()
+
+
+def build_codebook_detection_footprints(
+    off,
+    mask,
+    anchor_xy,
+    kernels=("monopole",),
+    n_scales=10,
+    device="cpu",
+):
+    """Build anchor-centered spatial atoms for full-time template detection."""
+    off_np = np.asarray(off, dtype=np.float32)
+    mask_np = np.asarray(mask, dtype=bool)
+    anchor_xy_np = np.asarray(anchor_xy, dtype=np.float32)
+    if off_np.ndim != 3 or off_np.shape[2] != 2:
+        raise ValueError(f"off must have shape (A, C, 2), got {off_np.shape}")
+    if mask_np.shape != off_np.shape[:2]:
+        raise ValueError(
+            f"mask must have shape {off_np.shape[:2]}, got {mask_np.shape}"
+        )
+    if anchor_xy_np.shape != (len(off_np), 2):
+        raise ValueError(
+            f"anchor_xy must have shape {(len(off_np), 2)}, got {anchor_xy_np.shape}"
+        )
+    profiles = build_profiles(kernels, n_scales)
+    off_t = torch.as_tensor(off_np, device=device)
+    mask_t = torch.as_tensor(mask_np, dtype=torch.float32, device=device)
+    source_xy = torch.as_tensor(anchor_xy_np, device=device)
+    dxy2 = (
+        (off_t[..., 0] - source_xy[:, None, 0]).square()
+        + (off_t[..., 1] - source_xy[:, None, 1]).square()
+    )
+    dz2 = torch.zeros_like(dxy2)
+    footprints = torch.empty(
+        (len(off_np), len(profiles), off_np.shape[1]), device=device
+    )
+    for profile, (name, params) in enumerate(profiles):
+        footprints[:, profile] = _normalize(
+            KERNELS[name](dxy2, dz2, params) * mask_t
+        )
+    return footprints.to("cpu").numpy(), profiles
 
 
 # --------------------------------------------------------------------------- #
