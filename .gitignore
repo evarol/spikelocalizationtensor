@@ -1,5 +1,6 @@
 *.md
 !/README.md
+memory/
 
 .ipynb_checkpoints/
 **/.ipynb_checkpoints/
