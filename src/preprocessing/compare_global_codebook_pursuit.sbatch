@@ -18,7 +18,7 @@ RUN_Q24=${RUN_Q24:?set RUN_Q24}
 RUN_Q32=${RUN_Q32:?set RUN_Q32}
 OUTPUT=${OUTPUT:?set OUTPUT}
 
-singularity exec --nv --overlay /scratch/${USER}/_ENVS/pytorch.ext3:ro \
+singularity exec --overlay /scratch/${USER}/_ENVS/pytorch.ext3:ro \
     /share/apps/images/cuda12.8.1-cudnn9.8.0-ubuntu24.04.2.sif \
     /bin/bash -c "source /ext3/env.sh && cd $ROOT && python \
         src/preprocessing/compare_global_codebook_pursuit.py \
