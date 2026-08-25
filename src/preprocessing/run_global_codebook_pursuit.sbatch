@@ -16,11 +16,12 @@ set -euo pipefail
 ROOT=/scratch/ap7151/iclr-paper/ANALYTIC_APPROACH
 RECORDING=/scratch/ap7151/_RAW_DATA/extra-motion/dataset1_p1/p1_g0_t0.imec0.ap.bin
 SESSION=$ROOT/runs/dataset1_p1
+CODEBOOK_DIR=${CODEBOOK_DIR:?set CODEBOOK_DIR to the completed raw codebook run}
 Q_VALUES=(8 16 24 32)
 Q=${Q_OVERRIDE:-${Q_VALUES[$SLURM_ARRAY_TASK_ID]}}
 THRESHOLD_MODE=${THRESHOLD_MODE:-matched}
-CODEBOOK=$SESSION/global_codebook_q${Q}.npz
-CALIBRATION=$SESSION/global_codebook_thresholds.json
+CODEBOOK=$CODEBOOK_DIR/global_codebook_q${Q}.npz
+CALIBRATION=$CODEBOOK_DIR/global_codebook_thresholds.json
 OUTPUT=$SESSION/global_codebook_pursuit_q${Q}_${THRESHOLD_MODE}_${SLURM_ARRAY_JOB_ID}_${SLURM_ARRAY_TASK_ID}
 
 if [[ ! "$Q" =~ ^(8|16|24|32)$ ]]; then

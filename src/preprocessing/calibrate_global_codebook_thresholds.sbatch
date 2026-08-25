@@ -14,13 +14,13 @@ set -euo pipefail
 
 ROOT=/scratch/ap7151/iclr-paper/ANALYTIC_APPROACH
 RECORDING=/scratch/ap7151/_RAW_DATA/extra-motion/dataset1_p1/p1_g0_t0.imec0.ap.bin
-SESSION=$ROOT/runs/dataset1_p1
-OUTPUT=$SESSION/global_codebook_thresholds.json
+CODEBOOK_DIR=${CODEBOOK_DIR:?set CODEBOOK_DIR to the completed raw codebook run}
+OUTPUT=$CODEBOOK_DIR/global_codebook_thresholds.json
 CODEBOOKS=(
-    "$SESSION/global_codebook_q8.npz"
-    "$SESSION/global_codebook_q16.npz"
-    "$SESSION/global_codebook_q24.npz"
-    "$SESSION/global_codebook_q32.npz"
+    "$CODEBOOK_DIR/global_codebook_q8.npz"
+    "$CODEBOOK_DIR/global_codebook_q16.npz"
+    "$CODEBOOK_DIR/global_codebook_q24.npz"
+    "$CODEBOOK_DIR/global_codebook_q32.npz"
 )
 
 for path in "${CODEBOOKS[@]}"; do
