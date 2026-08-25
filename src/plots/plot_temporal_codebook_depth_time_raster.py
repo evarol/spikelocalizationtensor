@@ -1,0 +1,150 @@
+"""Plot spike depth over time, colored by selected temporal-codebook row."""
+
+import argparse
+from pathlib import Path
+
+import matplotlib
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
+from matplotlib.colors import BoundaryNorm, ListedColormap
+import numpy as np
+
+
+BACKGROUND = "#0d0d0d"
+FONT = "#d7d7d7"
+GRID = "#292929"
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--session", type=Path, required=True)
+    parser.add_argument("--fit", type=Path, required=True)
+    parser.add_argument("--out", type=Path, required=True)
+    parser.add_argument("--sampling-frequency", type=float, default=30_000.0)
+    parser.add_argument("--max-points", type=int, default=0)
+    parser.add_argument("--marker-size", type=float, default=0.25)
+    parser.add_argument("--alpha", type=float, default=0.42)
+    parser.add_argument("--seed", type=int, default=23)
+    parser.add_argument("--overwrite", action="store_true")
+    args = parser.parse_args()
+
+    if args.out.exists() and not args.overwrite:
+        raise FileExistsError(f"refusing to overwrite {args.out}")
+    if args.sampling_frequency <= 0:
+        raise ValueError("sampling frequency must be positive")
+    if args.max_points < 0:
+        raise ValueError("max points must be nonnegative")
+    if args.marker_size <= 0:
+        raise ValueError("marker size must be positive")
+    if not 0 < args.alpha <= 1:
+        raise ValueError("alpha must lie in (0, 1]")
+
+    spike_times = np.load(args.session / "spike_times.npy", mmap_mode="r")
+    centroids = np.load(args.session / "centroids.npy", mmap_mode="r")
+    with np.load(args.fit, allow_pickle=False) as fit:
+        sources = np.asarray(fit["sources"], dtype=np.float32)
+        temporal_idx = np.asarray(fit["temporal_idx"], dtype=np.int64)
+        omega = np.asarray(fit["omega"], dtype=np.float32)
+
+    event_count = len(spike_times)
+    if centroids.shape != (event_count, 2):
+        raise ValueError(
+            f"expected centroids with shape {(event_count, 2)}, got {centroids.shape}"
+        )
+    if sources.shape != (event_count, 3):
+        raise ValueError(
+            f"expected sources with shape {(event_count, 3)}, got {sources.shape}"
+        )
+    if temporal_idx.shape != (event_count,):
+        raise ValueError(
+            f"expected temporal_idx with shape {(event_count,)}, got {temporal_idx.shape}"
+        )
+    if omega.ndim != 2 or len(omega) < 2:
+        raise ValueError(f"expected at least two temporal rows, got {omega.shape}")
+    if event_count == 0:
+        raise ValueError("cannot plot an empty fit")
+    if temporal_idx.min() < 0 or temporal_idx.max() >= len(omega):
+        raise ValueError("temporal_idx contains a row outside the codebook")
+
+    time_minutes = np.asarray(spike_times, dtype=np.float64) / (
+        60.0 * args.sampling_frequency
+    )
+    depth = (
+        np.asarray(centroids[:, 1], dtype=np.float32) + sources[:, 1]
+    )
+    finite = np.isfinite(time_minutes) & np.isfinite(depth)
+    rows = np.flatnonzero(finite)
+    if args.max_points and len(rows) > args.max_points:
+        rng = np.random.default_rng(args.seed)
+        rows = np.sort(rng.choice(rows, args.max_points, replace=False))
+
+    rgb = plt.colormaps["rainbow"](
+        np.linspace(0.0, 1.0, len(omega))
+    )[:, :3]
+    colormap = ListedColormap(rgb, name=f"q{len(omega)}_rgb")
+    boundaries = np.arange(len(omega) + 1, dtype=np.float64) - 0.5
+    normalization = BoundaryNorm(boundaries, len(omega))
+
+    figure, axis = plt.subplots(
+        figsize=(15, 7.5), constrained_layout=True, facecolor=BACKGROUND
+    )
+    artist = axis.scatter(
+        time_minutes[rows],
+        depth[rows],
+        c=temporal_idx[rows],
+        cmap=colormap,
+        norm=normalization,
+        marker=".",
+        s=args.marker_size,
+        linewidths=0,
+        alpha=args.alpha,
+        rasterized=True,
+    )
+    axis.set(
+        xlabel="recording time (min)",
+        ylabel="probe depth (µm)",
+        title=(
+            f"Q={len(omega)} temporal-codebook selections · "
+            f"{len(rows):,} / {event_count:,} spikes displayed"
+        ),
+    )
+    axis.set_xlim(0.0, max(float(time_minutes[finite].max()), 1e-9))
+    depth_low, depth_high = np.quantile(depth[finite], (0.002, 0.998))
+    axis.set_ylim(depth_low, depth_high)
+    axis.set_facecolor(BACKGROUND)
+    axis.grid(color=GRID, alpha=0.8, linewidth=0.45)
+    axis.set_axisbelow(True)
+    axis.tick_params(colors=FONT)
+    axis.xaxis.label.set_color(FONT)
+    axis.yaxis.label.set_color(FONT)
+    axis.title.set_color("#eeeeee")
+    for spine in axis.spines.values():
+        spine.set_color("#444444")
+        spine.set_linewidth(0.5)
+
+    colorbar = figure.colorbar(
+        artist,
+        ax=axis,
+        boundaries=boundaries,
+        ticks=np.arange(len(omega)),
+        pad=0.015,
+        fraction=0.035,
+        aspect=32,
+    )
+    colorbar.set_label("selected temporal codebook row", color=FONT)
+    colorbar.ax.tick_params(colors=FONT)
+    colorbar.ax.set_yticklabels([rf"$\Omega_{{{row}}}$" for row in range(len(omega))])
+    colorbar.outline.set_visible(False)
+
+    args.out.parent.mkdir(parents=True, exist_ok=True)
+    figure.savefig(args.out, dpi=800, facecolor=BACKGROUND)
+    plt.close(figure)
+    print(
+        f"wrote {args.out} with {len(rows):,}/{event_count:,} spikes and "
+        f"{len(omega)} linspaced RGB colors",
+        flush=True,
+    )
+
+
+if __name__ == "__main__":
+    main()
