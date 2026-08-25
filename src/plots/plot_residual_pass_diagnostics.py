@@ -69,6 +69,11 @@ def main():
 
     n_passes = int(passes.max()) + 1
     pass_numbers = np.arange(1, n_passes + 1)
+    display_ticks = pass_numbers
+    if n_passes > 12:
+        display_ticks = np.unique(
+            np.rint(np.linspace(1, n_passes, 10)).astype(np.int64)
+        )
     counts = np.bincount(passes, minlength=n_passes)
     drops = np.array(
         [np.median(energy_drop[passes == index]) for index in range(n_passes)]
@@ -101,16 +106,19 @@ def main():
         title="accepted-event raster",
         xlabel="time in chunk (ms)",
         ylabel="residual pass",
-        yticks=pass_numbers,
+        yticks=display_ticks,
     )
 
     bars = axes[0, 1].bar(pass_numbers, counts, color=colors)
-    axes[0, 1].bar_label(bars, labels=[f"{count:,}" for count in counts], padding=3)
+    if n_passes <= 12:
+        axes[0, 1].bar_label(
+            bars, labels=[f"{count:,}" for count in counts], padding=3
+        )
     axes[0, 1].set(
         title="accepted fits remain nearly flat",
         xlabel="residual pass",
         ylabel="accepted fits",
-        xticks=pass_numbers,
+        xticks=display_ticks,
     )
 
     samples = [captured_fraction[passes == index] for index in range(n_passes)]
@@ -125,7 +133,7 @@ def main():
         title="sequential captured fraction",
         xlabel="residual pass",
         ylabel="fraction of local waveform energy",
-        xticks=pass_numbers,
+        xticks=display_ticks,
         ylim=(0, min(1, np.percentile(captured_fraction, 99.8) * 1.08)),
     )
 
@@ -149,19 +157,30 @@ def main():
         title="residual energy trajectory",
         xlabel="residual pass",
         ylabel="fraction of input",
-        xticks=pass_numbers,
+        xticks=display_ticks,
         ylim=(0, 1),
     )
     axes[1, 0].legend(fontsize=8)
 
     limits = np.linspace(0, 2.0, 401)
     recurrence_text = []
+    legend_passes = set(
+        np.unique(
+            np.rint(
+                np.linspace(1, n_passes - 1, min(6, n_passes - 1))
+            ).astype(np.int64)
+        )
+    )
     for residual_pass, separation in recurrence.items():
         finite = separation[np.isfinite(separation)]
         cdf = np.searchsorted(np.sort(finite), limits, side="right") / len(separation)
         axes[1, 1].plot(
             limits, cdf, color=colors[residual_pass],
-            label=f"pass {residual_pass + 1}",
+            label=(
+                f"pass {residual_pass + 1}"
+                if residual_pass in legend_passes
+                else None
+            ),
         )
         recurrence_text.append(
             f"P{residual_pass + 1}: {100 * np.mean(separation <= 0.5):.1f}%"
@@ -169,7 +188,7 @@ def main():
     axes[1, 1].axvline(0.5, color="0.3", linestyle="--", linewidth=0.8)
     axes[1, 1].yaxis.set_major_formatter(PercentFormatter(1.0))
     axes[1, 1].set(
-        title="proximity to any earlier-pass event\n" + " · ".join(recurrence_text),
+        title="proximity to any earlier-pass event",
         xlabel="nearest event within 48 µm (ms)",
         ylabel="later-pass events within distance",
         xlim=(0, 2),
@@ -190,20 +209,25 @@ def main():
         vmax=max(0.01, float(usage.max())),
         interpolation="nearest",
     )
-    for row in range(n_passes):
-        for column in range(len(omega)):
-            axes[1, 2].text(
-                column, row, f"{100 * usage[row, column]:.1f}",
-                ha="center", va="center", fontsize=7,
-                color="white" if usage[row, column] > 0.55 * usage.max() else "black",
-            )
+    if n_passes * len(omega) <= 256:
+        for row in range(n_passes):
+            for column in range(len(omega)):
+                axes[1, 2].text(
+                    column, row, f"{100 * usage[row, column]:.1f}",
+                    ha="center", va="center", fontsize=7,
+                    color=(
+                        "white"
+                        if usage[row, column] > 0.55 * usage.max()
+                        else "black"
+                    ),
+                )
     axes[1, 2].set(
         title="temporal-waveform usage (%)",
         xlabel="temporal row",
         ylabel="residual pass",
         xticks=np.arange(len(omega)),
-        yticks=np.arange(n_passes),
-        yticklabels=pass_numbers,
+        yticks=display_ticks - 1,
+        yticklabels=display_ticks,
     )
     figure.colorbar(image, ax=axes[1, 2], label="fraction of pass fits")
 
