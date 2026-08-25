@@ -914,79 +914,85 @@ def localize_spikes_fixed_codebook(
         if mask_np.shape != (N, C):
             raise ValueError(f"mask must have shape {(N, C)}, got {mask_np.shape}")
 
-    sites = lattice(n_sites).to(device)
-    profiles = build_profiles(kernels, n_scales)
-    n_profiles = len(profiles)
-    cfg_rows = np.concatenate(
-        (off_np.reshape(N, -1), mask_np.astype(np.float32)), axis=1
-    )
-    cfg_u, cfg_id = np.unique(cfg_rows, axis=0, return_inverse=True)
-    config_keys = [row.tobytes() for row in cfg_u]
-    off_cfg = torch.as_tensor(
-        cfg_u[:, :2 * C].reshape(-1, C, 2), dtype=torch.float32, device=device
-    )
-    mask_cfg = torch.as_tensor(
-        cfg_u[:, 2 * C:], dtype=torch.float32, device=device
-    )
-    Yt = torch.as_tensor(Y_np, dtype=torch.float32, device=device)
-    mask_t = torch.as_tensor(mask_np, dtype=torch.bool, device=device)
-    Yt.masked_fill_(~mask_t[:, :, None], 0)
-    omega_t = _normalize(torch.as_tensor(omega_np, device=device))
+    with torch.profiler.record_function("localize/configuration_grouping_cpu"):
+        sites = lattice(n_sites).to(device)
+        profiles = build_profiles(kernels, n_scales)
+        n_profiles = len(profiles)
+        cfg_rows = np.concatenate(
+            (off_np.reshape(N, -1), mask_np.astype(np.float32)), axis=1
+        )
+        cfg_u, cfg_id = np.unique(cfg_rows, axis=0, return_inverse=True)
+        config_keys = [row.tobytes() for row in cfg_u]
+    with torch.profiler.record_function("localize/input_h2d"):
+        off_cfg = torch.as_tensor(
+            cfg_u[:, :2 * C].reshape(-1, C, 2), dtype=torch.float32, device=device
+        )
+        mask_cfg = torch.as_tensor(
+            cfg_u[:, 2 * C:], dtype=torch.float32, device=device
+        )
+        Yt = torch.as_tensor(Y_np, dtype=torch.float32, device=device)
+        mask_t = torch.as_tensor(mask_np, dtype=torch.bool, device=device)
+        Yt.masked_fill_(~mask_t[:, :, None], 0)
+        omega_t = _normalize(torch.as_tensor(omega_np, device=device))
 
-    projected = torch.einsum("nct,tq->ncq", Yt, omega_t.T)
-    input_energy = Yt.square().sum((1, 2))
-    pick, temporal_idx, alpha, captured_energy = _assign_hard_temporal(
-        sites,
-        profiles,
-        off_cfg,
-        mask_cfg,
-        cfg_id,
-        projected,
-        omega_t,
-        device,
-        config_batch_size=config_batch_size,
-        footprint_cache=coarse_footprint_cache,
-        config_keys=config_keys,
-    )
-    refined, coarse, temporal_idx, alpha, captured_energy, levels = _refine_sources(
-        Yt,
-        projected,
-        omega_t,
-        sites,
-        profiles,
-        off_cfg,
-        mask_cfg,
-        cfg_id,
-        pick,
-        temporal_idx,
-        alpha,
-        captured_energy,
-        n_sites,
-        device,
-        max_levels=refine_levels,
-    )
+    with torch.profiler.record_function("localize/temporal_projection"):
+        projected = torch.einsum("nct,tq->ncq", Yt, omega_t.T)
+        input_energy = Yt.square().sum((1, 2))
+    with torch.profiler.record_function("localize/coarse_assignment"):
+        pick, temporal_idx, alpha, captured_energy = _assign_hard_temporal(
+            sites,
+            profiles,
+            off_cfg,
+            mask_cfg,
+            cfg_id,
+            projected,
+            omega_t,
+            device,
+            config_batch_size=config_batch_size,
+            footprint_cache=coarse_footprint_cache,
+            config_keys=config_keys,
+        )
+    with torch.profiler.record_function("localize/discrete_refinement"):
+        refined, coarse, temporal_idx, alpha, captured_energy, levels = _refine_sources(
+            Yt,
+            projected,
+            omega_t,
+            sites,
+            profiles,
+            off_cfg,
+            mask_cfg,
+            cfg_id,
+            pick,
+            temporal_idx,
+            alpha,
+            captured_energy,
+            n_sites,
+            device,
+            max_levels=refine_levels,
+        )
 
     profile_idx = (pick % n_profiles).to("cpu").numpy()
     sources_grid = refined.to("cpu").numpy().astype(np.float64)
     continuous_energy_gain = torch.zeros_like(captured_energy)
     continuous_displacement = torch.zeros_like(captured_energy)
     if continuous:
-        source_t, alpha_t, continuous_energy, continuous_displacement = (
-            _continuous_refine_monopole(
-                off_np,
-                mask_np,
-                projected,
-                omega_t,
-                refined,
-                profiles,
-                profile_idx,
-                temporal_idx,
-                captured_energy,
-                device,
-                continuous_max_iterations,
-                continuous_backtracks,
+        with torch.profiler.record_function("localize/continuous_refinement"):
+            source_t, alpha_t, continuous_energy, continuous_displacement = (
+                _continuous_refine_monopole(
+                    off_np,
+                    mask_np,
+                    projected,
+                    omega_t,
+                    refined,
+                    profiles,
+                    profile_idx,
+                    temporal_idx,
+                    captured_energy,
+                    device,
+                    continuous_max_iterations,
+                    continuous_backtracks,
+                )
             )
-        )
         continuous_energy_gain = continuous_energy - captured_energy
         captured_energy = continuous_energy
         alpha = alpha_t
@@ -1002,18 +1008,19 @@ def localize_spikes_fixed_codebook(
     alpha_np = alpha.to("cpu").numpy()
     input_energy_np = input_energy.to("cpu").numpy()
     captured_energy_np = captured_energy.to("cpu").numpy()
-    prediction = reconstruct_spike_fits(
-        off_np,
-        mask_np,
-        sources,
-        profile_idx,
-        omega_t.to("cpu").numpy(),
-        temporal_idx_np,
-        alpha_np,
-        kernels=kernels,
-        n_scales=n_scales,
-        device=device,
-    )
+    with torch.profiler.record_function("localize/reconstruction_roundtrip"):
+        prediction = reconstruct_spike_fits(
+            off_np,
+            mask_np,
+            sources,
+            profile_idx,
+            omega_t.to("cpu").numpy(),
+            temporal_idx_np,
+            alpha_np,
+            kernels=kernels,
+            n_scales=n_scales,
+            device=device,
+        )
     return {
         "coarse_pick": pick.to("cpu").numpy(),
         "refined_pick": refined_pick,

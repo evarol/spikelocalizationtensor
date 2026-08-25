@@ -44,6 +44,13 @@ class ResidualConfig:
     fit_batch_size: int = 1024
     localization_config_batch_size: int = 32
     template_time_batch: int = 4096
+    pursuit_rounds: int = 0
+    pursuit_lockout_ms: float | None = None
+    pursuit_min_round_energy_drop_fraction: float = 0.0
+    codebook_learning_chunks: int = 0
+    codebook_momentum: float = 0.9
+    codebook_min_events_per_row: int = 32
+    codebook_learning_seed: int = 42
     kernel: str = "monopole"
     n_scales: int = 10
     n_sites: int = 16
@@ -274,6 +281,38 @@ def select_template_peaks_torch(
     )
 
 
+def select_conflict_free_peaks(
+    times,
+    channels,
+    scores,
+    lockout_samples,
+    max_peaks=None,
+):
+    times = np.asarray(times, dtype=np.int64)
+    channels = np.asarray(channels, dtype=np.int32)
+    scores = np.asarray(scores, dtype=np.float32)
+    if not (times.shape == channels.shape == scores.shape):
+        raise ValueError("peak times, channels, and scores must have equal shapes")
+    lockout_samples = int(lockout_samples)
+    if lockout_samples < 0:
+        raise ValueError("pursuit lockout must be nonnegative")
+    if not len(times):
+        return times, channels, scores
+    blocked = np.zeros(int(times.max()) + lockout_samples + 1, dtype=bool)
+    selected = []
+    for index, time in enumerate(times):
+        if blocked[time]:
+            continue
+        selected.append(index)
+        blocked[max(0, time - lockout_samples):time + lockout_samples + 1] = True
+        if max_peaks is not None and len(selected) >= max_peaks:
+            break
+    selected = np.asarray(selected, dtype=np.int64)
+    order = np.argsort(times[selected], kind="stable")
+    selected = selected[order]
+    return times[selected], channels[selected], scores[selected]
+
+
 def extract_waveforms(
     data,
     times,
@@ -362,6 +401,94 @@ def subtract_predictions_monotone(
     }
 
 
+def temporal_codebook_statistics(
+    waveforms,
+    prediction,
+    model_alpha,
+    fitted_alpha,
+    temporal_idx,
+    omega,
+):
+    waveforms = np.asarray(waveforms, dtype=np.float32)
+    prediction = np.asarray(prediction, dtype=np.float32)
+    model_alpha = np.asarray(model_alpha, dtype=np.float64)
+    fitted_alpha = np.asarray(fitted_alpha, dtype=np.float64)
+    temporal_idx = np.asarray(temporal_idx, dtype=np.int64)
+    omega = np.asarray(omega, dtype=np.float32)
+    if waveforms.shape != prediction.shape or waveforms.ndim != 3:
+        raise ValueError("waveforms and predictions must share shape (N, C, T)")
+    if omega.ndim != 2 or omega.shape[1] != waveforms.shape[2]:
+        raise ValueError("temporal codebook and waveform lengths are inconsistent")
+    if not (
+        len(model_alpha) == len(fitted_alpha) == len(temporal_idx) == len(waveforms)
+    ):
+        raise ValueError("temporal update arrays must have equal event counts")
+    numerator = np.zeros(omega.shape, dtype=np.float64)
+    weight = np.zeros(len(omega), dtype=np.float64)
+    count = np.zeros(len(omega), dtype=np.int64)
+    valid = (
+        np.isfinite(model_alpha)
+        & np.isfinite(fitted_alpha)
+        & (np.abs(model_alpha) > np.finfo(np.float32).eps)
+        & (temporal_idx >= 0)
+        & (temporal_idx < len(omega))
+    )
+    if not np.any(valid):
+        return numerator, weight, count
+    rows = temporal_idx[valid]
+    temporal = omega[rows]
+    spatial = np.einsum(
+        "nct,nt->nc", prediction[valid], temporal, optimize=True
+    ) / model_alpha[valid, None]
+    projected = np.einsum(
+        "nc,nct->nt", spatial, waveforms[valid], optimize=True
+    )
+    event_alpha = fitted_alpha[valid]
+    np.add.at(numerator, rows, event_alpha[:, None] * projected)
+    np.add.at(weight, rows, np.square(event_alpha))
+    np.add.at(count, rows, 1)
+    return numerator, weight, count
+
+
+def update_temporal_codebook(
+    omega,
+    numerator,
+    weight,
+    count,
+    momentum=0.9,
+    min_events_per_row=32,
+):
+    omega = np.asarray(omega, dtype=np.float32)
+    numerator = np.asarray(numerator, dtype=np.float64)
+    weight = np.asarray(weight, dtype=np.float64)
+    count = np.asarray(count, dtype=np.int64)
+    momentum = float(momentum)
+    min_events_per_row = int(min_events_per_row)
+    if numerator.shape != omega.shape or weight.shape != (len(omega),):
+        raise ValueError("codebook sufficient statistics have inconsistent shapes")
+    if count.shape != (len(omega),):
+        raise ValueError("codebook event counts have an inconsistent shape")
+    if not 0 <= momentum <= 1:
+        raise ValueError("codebook momentum must lie in [0, 1]")
+    if min_events_per_row < 1:
+        raise ValueError("minimum codebook events per row must be positive")
+    updated = omega.copy()
+    used = (count >= min_events_per_row) & np.isfinite(weight) & (weight > 0)
+    for row in np.flatnonzero(used):
+        estimate = numerator[row] / weight[row]
+        norm = np.linalg.norm(estimate)
+        if not np.isfinite(norm) or norm == 0:
+            continue
+        estimate = estimate / norm
+        if np.dot(estimate, omega[row]) < 0:
+            estimate = -estimate
+        blended = momentum * omega[row] + (1 - momentum) * estimate
+        blended_norm = np.linalg.norm(blended)
+        if np.isfinite(blended_norm) and blended_norm > 0:
+            updated[row] = blended / blended_norm
+    return updated
+
+
 def _empty_result(width, waveform_length, save_waveforms):
     result = {
         "spike_times": np.empty(0, dtype=np.int64),
@@ -401,7 +528,7 @@ def _concatenate_event_parts(parts, width, waveform_length, save_waveforms):
     return {key: value[order] for key, value in result.items()}
 
 
-def peel_preprocessed_chunk(
+def _peel_preprocessed_chunk_legacy(
     data,
     global_start,
     core_start,
@@ -460,32 +587,35 @@ def peel_preprocessed_chunk(
             "pass_finalize": 0.0,
         }
         started = profile_start()
-        residual_before_pass = residual.copy()
-        pass_energy_before = float(
-            np.square(residual[core_start:core_stop], dtype=np.float64).sum()
-        )
+        with torch.profiler.record_function("residual/pass_setup"):
+            residual_before_pass = residual.copy()
+            pass_energy_before = float(
+                np.square(residual[core_start:core_stop], dtype=np.float64).sum()
+            )
         profile_stop(timings, "pass_setup", started)
         started = profile_start()
-        template_scores = full_template_scores(
-            residual,
-            noise,
-            omega,
-            detection_footprints,
-            neighborhood_ids,
-            device=config.device,
-            time_batch=config.template_time_batch,
-            return_torch=True,
-        )
+        with torch.profiler.record_function("residual/template_scoring"):
+            template_scores = full_template_scores(
+                residual,
+                noise,
+                omega,
+                detection_footprints,
+                neighborhood_ids,
+                device=config.device,
+                time_batch=config.template_time_batch,
+                return_torch=True,
+            )
         profile_stop(timings, "template_scoring", started)
         started = profile_start()
-        times, channels, detection_score = select_template_peaks_torch(
-            template_scores,
-            neighborhood_ids,
-            threshold=config.threshold,
-            temporal_radius=temporal_radius,
-            n_before=n_before,
-            max_peaks=config.max_peaks_per_round,
-        )
+        with torch.profiler.record_function("residual/peak_selection"):
+            times, channels, detection_score = select_template_peaks_torch(
+                template_scores,
+                neighborhood_ids,
+                threshold=config.threshold,
+                temporal_radius=temporal_radius,
+                n_before=n_before,
+                max_peaks=config.max_peaks_per_round,
+            )
         profile_stop(timings, "peak_selection", started)
         if not len(times):
             if config.profile_stages:
@@ -505,33 +635,35 @@ def peel_preprocessed_chunk(
             batch_times = times[start:stop]
             batch_channels = channels[start:stop]
             started = profile_start()
-            waveforms, ids, local_coords, mask = extract_waveforms(
-                residual,
-                batch_times,
-                batch_channels,
-                neighborhood_ids,
-                channel_local_coords,
-                n_before,
-                n_after,
-            )
+            with torch.profiler.record_function("residual/waveform_extraction"):
+                waveforms, ids, local_coords, mask = extract_waveforms(
+                    residual,
+                    batch_times,
+                    batch_channels,
+                    neighborhood_ids,
+                    channel_local_coords,
+                    n_before,
+                    n_after,
+                )
             profile_stop(timings, "waveform_extraction", started)
             started = profile_start()
-            fit = localize_spikes_fixed_codebook(
-                local_coords,
-                waveforms,
-                omega,
-                kernels=kernels,
-                n_scales=config.n_scales,
-                n_sites=config.n_sites,
-                refine_levels=config.refine_levels,
-                continuous=config.continuous_refine,
-                continuous_max_iterations=config.continuous_max_iterations,
-                continuous_backtracks=config.continuous_backtracks,
-                device=config.device,
-                mask=mask,
-                coarse_footprint_cache=coarse_footprint_cache,
-                config_batch_size=config.localization_config_batch_size,
-            )
+            with torch.profiler.record_function("residual/localization"):
+                fit = localize_spikes_fixed_codebook(
+                    local_coords,
+                    waveforms,
+                    omega,
+                    kernels=kernels,
+                    n_scales=config.n_scales,
+                    n_sites=config.n_sites,
+                    refine_levels=config.refine_levels,
+                    continuous=config.continuous_refine,
+                    continuous_max_iterations=config.continuous_max_iterations,
+                    continuous_backtracks=config.continuous_backtracks,
+                    device=config.device,
+                    mask=mask,
+                    coarse_footprint_cache=coarse_footprint_cache,
+                    config_batch_size=config.localization_config_batch_size,
+                )
             profile_stop(timings, "localization", started)
             captured_fraction = fit["captured_energy"] / np.maximum(
                 fit["input_energy"], np.finfo(np.float32).tiny
@@ -546,16 +678,17 @@ def peel_preprocessed_chunk(
                 continue
             selected = np.flatnonzero(accepted)
             started = profile_start()
-            subtraction = subtract_predictions_monotone(
-                residual,
-                batch_times[selected],
-                ids[selected],
-                mask[selected],
-                fit["prediction"][selected],
-                n_before,
-                n_after,
-                min_captured_fraction=config.min_captured_fraction,
-            )
+            with torch.profiler.record_function("residual/subtraction"):
+                subtraction = subtract_predictions_monotone(
+                    residual,
+                    batch_times[selected],
+                    ids[selected],
+                    mask[selected],
+                    fit["prediction"][selected],
+                    n_before,
+                    n_after,
+                    min_captured_fraction=config.min_captured_fraction,
+                )
             profile_stop(timings, "subtraction", started)
             accepted[:] = False
             accepted[selected[subtraction["accepted"]]] = True
@@ -628,12 +761,13 @@ def peel_preprocessed_chunk(
         if accepted_for_subtraction == 0:
             break
         started = profile_start()
-        pass_energy_after = float(
-            np.square(residual[core_start:core_stop], dtype=np.float64).sum()
-        )
-        pass_energy_drop_fraction = (
-            pass_energy_before - pass_energy_after
-        ) / max(pass_energy_before, np.finfo(np.float64).tiny)
+        with torch.profiler.record_function("residual/pass_finalize"):
+            pass_energy_after = float(
+                np.square(residual[core_start:core_stop], dtype=np.float64).sum()
+            )
+            pass_energy_drop_fraction = (
+                pass_energy_before - pass_energy_after
+            ) / max(pass_energy_before, np.finfo(np.float64).tiny)
         if pass_energy_drop_fraction < config.min_pass_energy_drop_fraction:
             residual[...] = residual_before_pass
             print(
@@ -669,6 +803,350 @@ def peel_preprocessed_chunk(
     )
 
 
+def _peel_preprocessed_chunk_pursuit(
+    data,
+    global_start,
+    core_start,
+    core_stop,
+    channel_positions,
+    neighborhood_ids,
+    channel_local_coords,
+    channel_centroids,
+    neighbor_counts,
+    spatial_neighbors,
+    detection_footprints,
+    omega,
+    fs,
+    config,
+    coarse_footprint_cache=None,
+):
+    if not 1 <= config.pursuit_rounds <= np.iinfo(np.int8).max:
+        raise ValueError("pursuit rounds must lie in [1, 127]")
+    n_before = int(round(config.ms_before * fs / 1000))
+    n_after = int(round(config.ms_after * fs / 1000))
+    waveform_length = n_before + n_after
+    temporal_radius = max(1, int(round(config.temporal_radius_ms * fs / 1000)))
+    if config.pursuit_lockout_ms is None:
+        lockout_samples = waveform_length - 1
+    else:
+        lockout_samples = max(
+            0, int(round(config.pursuit_lockout_ms * fs / 1000))
+        )
+    noise = robust_channel_noise(data)
+    residual = np.array(data, dtype=np.float32, copy=True)
+    parts = []
+    kernels = tuple(part.strip() for part in config.kernel.split(","))
+    if coarse_footprint_cache is None:
+        coarse_footprint_cache = {}
+    statistic_numerator = np.zeros_like(omega, dtype=np.float64)
+    statistic_weight = np.zeros(len(omega), dtype=np.float64)
+    statistic_count = np.zeros(len(omega), dtype=np.int64)
+
+    def profile_start():
+        if not config.profile_stages:
+            return None
+        if torch.device(config.device).type == "cuda":
+            torch.cuda.synchronize(torch.device(config.device))
+        return perf_counter()
+
+    def profile_stop(timings, stage, started):
+        if started is None:
+            return
+        if torch.device(config.device).type == "cuda":
+            torch.cuda.synchronize(torch.device(config.device))
+        timings[stage] += perf_counter() - started
+
+    for pursuit_round in range(config.pursuit_rounds):
+        round_started = profile_start()
+        timings = {
+            "template_scoring": 0.0,
+            "peak_selection": 0.0,
+            "waveform_extraction": 0.0,
+            "localization": 0.0,
+            "subtraction": 0.0,
+        }
+        residual_before_round = residual.copy()
+        energy_before = float(
+            np.square(residual[core_start:core_stop], dtype=np.float64).sum()
+        )
+        started = profile_start()
+        with torch.profiler.record_function("pursuit/template_scoring"):
+            template_scores = full_template_scores(
+                residual,
+                noise,
+                omega,
+                detection_footprints,
+                neighborhood_ids,
+                device=config.device,
+                time_batch=config.template_time_batch,
+                return_torch=True,
+            )
+        profile_stop(timings, "template_scoring", started)
+        started = profile_start()
+        with torch.profiler.record_function("pursuit/peak_selection"):
+            times, channels, detection_score = select_template_peaks_torch(
+                template_scores,
+                neighborhood_ids,
+                threshold=config.threshold,
+                temporal_radius=temporal_radius,
+                n_before=n_before,
+                max_peaks=None,
+            )
+            times, channels, detection_score = select_conflict_free_peaks(
+                times,
+                channels,
+                detection_score,
+                lockout_samples,
+                max_peaks=config.max_peaks_per_round,
+            )
+        profile_stop(timings, "peak_selection", started)
+        if not len(times):
+            break
+
+        round_parts = []
+        round_numerator = np.zeros_like(statistic_numerator)
+        round_weight = np.zeros_like(statistic_weight)
+        round_count = np.zeros_like(statistic_count)
+        accepted_in_round = 0
+        for start in range(0, len(times), config.fit_batch_size):
+            stop = min(start + config.fit_batch_size, len(times))
+            batch_times = times[start:stop]
+            batch_channels = channels[start:stop]
+            started = profile_start()
+            with torch.profiler.record_function("pursuit/waveform_extraction"):
+                waveforms, ids, local_coords, mask = extract_waveforms(
+                    residual,
+                    batch_times,
+                    batch_channels,
+                    neighborhood_ids,
+                    channel_local_coords,
+                    n_before,
+                    n_after,
+                )
+            profile_stop(timings, "waveform_extraction", started)
+            started = profile_start()
+            with torch.profiler.record_function("pursuit/localization"):
+                fit = localize_spikes_fixed_codebook(
+                    local_coords,
+                    waveforms,
+                    omega,
+                    kernels=kernels,
+                    n_scales=config.n_scales,
+                    n_sites=config.n_sites,
+                    refine_levels=config.refine_levels,
+                    continuous=config.continuous_refine,
+                    continuous_max_iterations=config.continuous_max_iterations,
+                    continuous_backtracks=config.continuous_backtracks,
+                    device=config.device,
+                    mask=mask,
+                    coarse_footprint_cache=coarse_footprint_cache,
+                    config_batch_size=config.localization_config_batch_size,
+                )
+            profile_stop(timings, "localization", started)
+            captured_fraction = fit["captured_energy"] / np.maximum(
+                fit["input_energy"], np.finfo(np.float32).tiny
+            )
+            accepted = (
+                np.isfinite(captured_fraction)
+                & np.isfinite(fit["alpha"])
+                & (fit["captured_energy"] > 0)
+                & (captured_fraction >= config.min_captured_fraction)
+            )
+            if not np.any(accepted):
+                continue
+            selected = np.flatnonzero(accepted)
+            started = profile_start()
+            with torch.profiler.record_function("pursuit/subtraction"):
+                subtraction = subtract_predictions_monotone(
+                    residual,
+                    batch_times[selected],
+                    ids[selected],
+                    mask[selected],
+                    fit["prediction"][selected],
+                    n_before,
+                    n_after,
+                    min_captured_fraction=config.min_captured_fraction,
+                )
+            profile_stop(timings, "subtraction", started)
+            accepted[:] = False
+            accepted_indices = selected[subtraction["accepted"]]
+            accepted[accepted_indices] = True
+            if not np.any(accepted):
+                continue
+            accepted_in_round += int(accepted.sum())
+            fitted_alpha = np.asarray(fit["alpha"]).copy()
+            fitted_input_energy = np.zeros(len(fitted_alpha), dtype=np.float32)
+            fitted_captured_energy = np.zeros(len(fitted_alpha), dtype=np.float32)
+            fitted_captured_fraction = np.zeros(len(fitted_alpha), dtype=np.float32)
+            fitted_waveforms = np.zeros_like(waveforms, dtype=np.float32)
+            fitted_alpha[selected] *= subtraction["scale"]
+            fitted_input_energy[selected] = subtraction["input_energy"]
+            fitted_captured_energy[selected] = subtraction["captured_energy"]
+            fitted_captured_fraction[selected] = subtraction["captured_fraction"]
+            fitted_waveforms[selected] = subtraction["waveforms"]
+
+            subtraction_accepted = subtraction["accepted"]
+            statistics_in_core = (
+                (batch_times[accepted_indices] >= core_start)
+                & (batch_times[accepted_indices] < core_stop)
+            )
+            numerator, weight, count = temporal_codebook_statistics(
+                subtraction["waveforms"][subtraction_accepted][statistics_in_core],
+                fit["prediction"][accepted_indices][statistics_in_core],
+                fit["alpha"][accepted_indices][statistics_in_core],
+                fitted_alpha[accepted_indices][statistics_in_core],
+                fit["temporal_idx"][accepted_indices][statistics_in_core],
+                omega,
+            )
+            round_numerator += numerator
+            round_weight += weight
+            round_count += count
+
+            in_core = (
+                (batch_times >= core_start)
+                & (batch_times < core_stop)
+                & accepted
+            )
+            if not np.any(in_core):
+                continue
+            anchor = batch_channels[in_core]
+            sources = fit["sources"][in_core].astype(np.float32)
+            sources_grid = fit["sources_grid"][in_core].astype(np.float32)
+            centroids = channel_centroids[anchor]
+            global_sources = np.column_stack(
+                (centroids + sources[:, :2], sources[:, 2])
+            ).astype(np.float32)
+            part = {
+                "spike_times": (
+                    global_start + batch_times[in_core]
+                ).astype(np.int64),
+                "spike_channels": anchor.astype(np.int32),
+                "sources": sources,
+                "sources_grid": sources_grid,
+                "global_sources": global_sources,
+                "centroids": centroids.astype(np.float32),
+                "neighbor_ids": ids[in_core].astype(np.int32),
+                "neighbor_counts": neighbor_counts[anchor].astype(np.int16),
+                "local_coords": local_coords[in_core].astype(np.float32),
+                "profile_idx": fit["profile_idx"][in_core].astype(np.int16),
+                "temporal_idx": fit["temporal_idx"][in_core].astype(np.int16),
+                "alpha": fitted_alpha[in_core].astype(np.float32),
+                "detection_score": detection_score[start:stop][in_core].astype(
+                    np.float32
+                ),
+                "input_energy": fitted_input_energy[in_core],
+                "captured_energy": fitted_captured_energy[in_core],
+                "captured_fraction": fitted_captured_fraction[in_core],
+                "continuous_displacement_um": fit[
+                    "continuous_displacement_um"
+                ][in_core].astype(np.float32),
+                "continuous_energy_gain": fit["continuous_energy_gain"][
+                    in_core
+                ].astype(np.float32),
+                "pass_energy_drop_fraction": np.zeros(
+                    in_core.sum(), dtype=np.float32
+                ),
+                "residual_pass": np.full(
+                    in_core.sum(), pursuit_round, dtype=np.int8
+                ),
+            }
+            if config.save_waveforms:
+                part["residual_waveforms"] = fitted_waveforms[in_core]
+            round_parts.append(part)
+
+        if accepted_in_round == 0:
+            break
+        energy_after = float(
+            np.square(residual[core_start:core_stop], dtype=np.float64).sum()
+        )
+        energy_drop_fraction = (
+            energy_before - energy_after
+        ) / max(energy_before, np.finfo(np.float64).tiny)
+        if (
+            energy_drop_fraction
+            < config.pursuit_min_round_energy_drop_fraction
+        ):
+            residual[...] = residual_before_round
+            print(
+                f"pursuit round {pursuit_round + 1}: rollback "
+                f"{accepted_in_round} fits; energy drop "
+                f"{energy_drop_fraction:.6f} < "
+                f"{config.pursuit_min_round_energy_drop_fraction:.6f}",
+                flush=True,
+            )
+            break
+        for part in round_parts:
+            part["pass_energy_drop_fraction"].fill(energy_drop_fraction)
+        parts.extend(round_parts)
+        statistic_numerator += round_numerator
+        statistic_weight += round_weight
+        statistic_count += round_count
+        print(
+            f"pursuit round {pursuit_round + 1}: accepted "
+            f"{accepted_in_round} fits; energy drop "
+            f"{energy_drop_fraction:.6f}",
+            flush=True,
+        )
+        if config.profile_stages:
+            total = perf_counter() - round_started
+            detail = " ".join(
+                f"{name}={seconds:.3f}s" for name, seconds in timings.items()
+            )
+            print(
+                f"profile pursuit round {pursuit_round + 1}: "
+                f"{detail} total={total:.3f}s",
+                flush=True,
+            )
+
+    result = _concatenate_event_parts(
+        parts, neighborhood_ids.shape[1], waveform_length, config.save_waveforms
+    )
+    return result, (statistic_numerator, statistic_weight, statistic_count)
+
+
+def peel_preprocessed_chunk(
+    data,
+    global_start,
+    core_start,
+    core_stop,
+    channel_positions,
+    neighborhood_ids,
+    channel_local_coords,
+    channel_centroids,
+    neighbor_counts,
+    spatial_neighbors,
+    detection_footprints,
+    omega,
+    fs,
+    config,
+    coarse_footprint_cache=None,
+):
+    arguments = (
+        data,
+        global_start,
+        core_start,
+        core_stop,
+        channel_positions,
+        neighborhood_ids,
+        channel_local_coords,
+        channel_centroids,
+        neighbor_counts,
+        spatial_neighbors,
+        detection_footprints,
+        omega,
+        fs,
+        config,
+    )
+    if config.pursuit_rounds > 0:
+        result, _ = _peel_preprocessed_chunk_pursuit(
+            *arguments, coarse_footprint_cache=coarse_footprint_cache
+        )
+        return result
+    return _peel_preprocessed_chunk_legacy(
+        *arguments, coarse_footprint_cache=coarse_footprint_cache
+    )
+
+
 def load_omega(path):
     path = Path(path)
     if path.suffix == ".npy":
@@ -691,6 +1169,42 @@ def _write_chunk(path, result):
     temporary = path.with_suffix(".tmp.npz")
     np.savez(temporary, **result)
     temporary.replace(path)
+
+
+def _write_numpy_atomic(path, array):
+    path = Path(path)
+    temporary = path.with_suffix(".tmp.npy")
+    np.save(temporary, array)
+    temporary.replace(path)
+
+
+def _write_json_atomic(path, value):
+    path = Path(path)
+    temporary = path.with_suffix(".tmp.json")
+    temporary.write_text(json.dumps(value, indent=2) + "\n")
+    temporary.replace(path)
+
+
+def _write_torch_profile(profiler, output_dir, chunk_number):
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    averages = profiler.key_averages()
+    cpu_table = averages.table(sort_by="self_cpu_time_total", row_limit=100)
+    device_table = averages.table(sort_by="self_device_time_total", row_limit=100)
+    (output_dir / "cpu_operators.txt").write_text(cpu_table + "\n")
+    (output_dir / "gpu_operators.txt").write_text(device_table + "\n")
+    metadata = {
+        "profiled_chunk": chunk_number,
+        "torch_version": torch.__version__,
+        "torch_cuda_version": torch.version.cuda,
+        "cuda_device": torch.cuda.get_device_name(torch.cuda.current_device()),
+    }
+    (output_dir / "metadata.json").write_text(json.dumps(metadata, indent=2) + "\n")
+    profiler.export_chrome_trace(str(output_dir / "trace.json"))
+    print("=== torch profiler: top CPU operators ===", flush=True)
+    print(averages.table(sort_by="self_cpu_time_total", row_limit=30), flush=True)
+    print("=== torch profiler: top GPU operators ===", flush=True)
+    print(averages.table(sort_by="self_device_time_total", row_limit=30), flush=True)
 
 
 def consolidate_chunks(chunk_dir, output_path, save_waveforms):
@@ -732,6 +1246,8 @@ def run_recording(
     start_seconds=0.0,
     duration_seconds=None,
     resume=False,
+    torch_profile_dir=None,
+    torch_profile_chunk=2,
 ):
     import spikeglx
 
@@ -743,6 +1259,11 @@ def run_recording(
     chunk_dir = output_path / "chunks"
     chunk_dir.mkdir(exist_ok=True)
     omega = load_omega(omega_path)
+    initial_omega = omega.copy()
+    if config.codebook_learning_chunks < 0:
+        raise ValueError("codebook learning chunks must be nonnegative")
+    if config.codebook_learning_chunks > 0 and config.pursuit_rounds <= 0:
+        raise ValueError("codebook learning requires pursuit rounds")
 
     reader = spikeglx.Reader(recording_path)
     try:
@@ -804,12 +1325,118 @@ def run_recording(
         (output_path / "config.json").write_text(
             json.dumps(metadata, indent=2) + "\n"
         )
-        np.save(output_path / "omega.npy", omega)
         np.save(output_path / "channel_positions.npy", channel_positions)
         np.save(output_path / "detection_footprints.npy", detection_footprints)
 
         starts = list(range(first_sample, requested_stop, chunk_samples))
+        if not starts:
+            raise ValueError("the requested recording interval is empty")
+
+        def load_preprocessed_chunk(core_global_start):
+            core_global_stop = min(core_global_start + chunk_samples, requested_stop)
+            read_start = max(0, core_global_start - margin)
+            read_stop = min(reader.ns, core_global_stop + margin)
+            with torch.profiler.record_function("chunk/spikeglx_read"):
+                raw = reader[read_start:read_stop, :n_channels]
+            with torch.profiler.record_function("chunk/preprocess_voltage"):
+                data = preprocess_voltage(
+                    raw,
+                    fs,
+                    freq_min=config.freq_min,
+                    freq_max=config.freq_max,
+                    order=config.filter_order,
+                )
+            return data, read_start, core_global_stop
+
         coarse_footprint_cache = {}
+        learned_path = output_path / "omega_learned.npy"
+        if config.codebook_learning_chunks > 0:
+            _write_numpy_atomic(output_path / "omega_initial.npy", initial_omega)
+            completed_chunks = tuple(chunk_dir.glob("chunk_*.npz"))
+            if resume and learned_path.exists():
+                omega = load_omega(learned_path)
+                if omega.shape != initial_omega.shape:
+                    raise ValueError("saved learned codebook shape does not match the input")
+                print(f"loaded learned temporal codebook from {learned_path}", flush=True)
+            else:
+                if resume and completed_chunks:
+                    raise RuntimeError(
+                        "cannot resume learned-codebook extraction without omega_learned.npy"
+                    )
+                learning_count = min(config.codebook_learning_chunks, len(starts))
+                rng = np.random.default_rng(config.codebook_learning_seed)
+                learning_indices = rng.permutation(len(starts))[:learning_count]
+                history = []
+                for learning_step, chunk_index in enumerate(learning_indices, start=1):
+                    core_global_start = starts[int(chunk_index)]
+                    data, read_start, core_global_stop = load_preprocessed_chunk(
+                        core_global_start
+                    )
+                    _, statistics = _peel_preprocessed_chunk_pursuit(
+                        data,
+                        read_start,
+                        core_global_start - read_start,
+                        core_global_stop - read_start,
+                        channel_positions,
+                        neighborhood_ids,
+                        channel_local_coords,
+                        channel_centroids,
+                        neighbor_counts,
+                        spatial_neighbors,
+                        detection_footprints,
+                        omega,
+                        fs,
+                        config,
+                        coarse_footprint_cache=coarse_footprint_cache,
+                    )
+                    numerator, weight, count = statistics
+                    previous = omega
+                    omega = update_temporal_codebook(
+                        omega,
+                        numerator,
+                        weight,
+                        count,
+                        momentum=config.codebook_momentum,
+                        min_events_per_row=config.codebook_min_events_per_row,
+                    )
+                    row_change = np.linalg.norm(omega - previous, axis=1)
+                    updated_rows = count >= config.codebook_min_events_per_row
+                    history.append(
+                        {
+                            "learning_step": learning_step,
+                            "chunk_index": int(chunk_index),
+                            "core_start_sample": int(core_global_start),
+                            "events_per_row": count.tolist(),
+                            "updated_rows": np.flatnonzero(updated_rows).tolist(),
+                            "row_l2_change": row_change.tolist(),
+                        }
+                    )
+                    print(
+                        f"codebook learning {learning_step}/{learning_count}: "
+                        f"chunk {int(chunk_index) + 1}, "
+                        f"events={int(count.sum())}, "
+                        f"updated_rows={int(updated_rows.sum())}, "
+                        f"max_row_change={float(row_change.max()):.6f}",
+                        flush=True,
+                    )
+                _write_numpy_atomic(learned_path, omega)
+                _write_json_atomic(
+                    output_path / "codebook_learning_history.json", history
+                )
+            _write_numpy_atomic(output_path / "omega.npy", omega)
+        else:
+            _write_numpy_atomic(output_path / "omega.npy", omega)
+
+        if torch_profile_dir is not None:
+            if not 1 <= torch_profile_chunk <= len(starts):
+                raise ValueError(
+                    f"torch profile chunk must be in [1, {len(starts)}], "
+                    f"got {torch_profile_chunk}"
+                )
+            if torch.device(config.device).type != "cuda":
+                raise ValueError("CPU/GPU profiling requires --device cuda")
+            if not torch.cuda.is_available():
+                raise RuntimeError("CUDA is unavailable on the profiling node")
         for chunk_index, core_global_start in enumerate(starts):
             chunk_path = chunk_dir / f"chunk_{chunk_index:06d}.npz"
             if resume and chunk_path.exists():
@@ -817,33 +1444,58 @@ def run_recording(
                 continue
             core_global_stop = min(core_global_start + chunk_samples, requested_stop)
             read_start = max(0, core_global_start - margin)
-            read_stop = min(reader.ns, core_global_stop + margin)
-            raw = reader[read_start:read_stop, :n_channels]
-            data = preprocess_voltage(
-                raw,
-                fs,
-                freq_min=config.freq_min,
-                freq_max=config.freq_max,
-                order=config.filter_order,
-            )
-            result = peel_preprocessed_chunk(
-                data,
-                read_start,
-                core_global_start - read_start,
-                core_global_stop - read_start,
-                channel_positions,
-                neighborhood_ids,
-                channel_local_coords,
-                channel_centroids,
-                neighbor_counts,
-                spatial_neighbors,
-                detection_footprints,
-                omega,
-                fs,
-                config,
-                coarse_footprint_cache=coarse_footprint_cache,
-            )
-            _write_chunk(chunk_path, result)
+
+            def process_chunk():
+                data, loaded_read_start, loaded_core_stop = load_preprocessed_chunk(
+                    core_global_start
+                )
+                with torch.profiler.record_function("chunk/residual_peeling"):
+                    result = peel_preprocessed_chunk(
+                        data,
+                        loaded_read_start,
+                        core_global_start - loaded_read_start,
+                        loaded_core_stop - loaded_read_start,
+                        channel_positions,
+                        neighborhood_ids,
+                        channel_local_coords,
+                        channel_centroids,
+                        neighbor_counts,
+                        spatial_neighbors,
+                        detection_footprints,
+                        omega,
+                        fs,
+                        config,
+                        coarse_footprint_cache=coarse_footprint_cache,
+                    )
+                with torch.profiler.record_function("chunk/write_checkpoint"):
+                    _write_chunk(chunk_path, result)
+                return result
+
+            if torch_profile_dir is not None and chunk_index + 1 == torch_profile_chunk:
+                print(
+                    f"profiling chunk {chunk_index + 1}/{len(starts)} to "
+                    f"{torch_profile_dir}",
+                    flush=True,
+                )
+                activities = [
+                    torch.profiler.ProfilerActivity.CPU,
+                    torch.profiler.ProfilerActivity.CUDA,
+                ]
+                with torch.profiler.profile(
+                    activities=activities,
+                    record_shapes=False,
+                    profile_memory=True,
+                    with_stack=False,
+                    with_flops=False,
+                ) as profiler:
+                    result = process_chunk()
+                _write_torch_profile(
+                    profiler,
+                    torch_profile_dir,
+                    chunk_index + 1,
+                )
+            else:
+                result = process_chunk()
             print(
                 f"chunk {chunk_index + 1}/{len(starts)} "
                 f"samples [{core_global_start}, {core_global_stop}) "
@@ -877,6 +1529,15 @@ def main():
     parser.add_argument("--fit-batch-size", type=int, default=1024)
     parser.add_argument("--localization-config-batch-size", type=int, default=32)
     parser.add_argument("--template-time-batch", type=int, default=4096)
+    parser.add_argument("--pursuit-rounds", type=int, default=0)
+    parser.add_argument("--pursuit-lockout-ms", type=float)
+    parser.add_argument(
+        "--pursuit-min-round-energy-drop-fraction", type=float, default=0.0
+    )
+    parser.add_argument("--codebook-learning-chunks", type=int, default=0)
+    parser.add_argument("--codebook-momentum", type=float, default=0.9)
+    parser.add_argument("--codebook-min-events-per-row", type=int, default=32)
+    parser.add_argument("--codebook-learning-seed", type=int, default=42)
     parser.add_argument("--kernel", default="monopole")
     parser.add_argument("--n-scales", type=int, default=10)
     parser.add_argument("--n-sites", type=int, default=16)
@@ -889,6 +1550,8 @@ def main():
     parser.add_argument("--device", default="cuda")
     parser.add_argument("--save-waveforms", action="store_true")
     parser.add_argument("--profile-stages", action="store_true")
+    parser.add_argument("--torch-profile-dir", type=Path)
+    parser.add_argument("--torch-profile-chunk", type=int, default=2)
     parser.add_argument("--start-seconds", type=float, default=0.0)
     parser.add_argument("--duration-seconds", type=float)
     parser.add_argument("--resume", action="store_true")
@@ -910,6 +1573,15 @@ def main():
         fit_batch_size=args.fit_batch_size,
         localization_config_batch_size=args.localization_config_batch_size,
         template_time_batch=args.template_time_batch,
+        pursuit_rounds=args.pursuit_rounds,
+        pursuit_lockout_ms=args.pursuit_lockout_ms,
+        pursuit_min_round_energy_drop_fraction=(
+            args.pursuit_min_round_energy_drop_fraction
+        ),
+        codebook_learning_chunks=args.codebook_learning_chunks,
+        codebook_momentum=args.codebook_momentum,
+        codebook_min_events_per_row=args.codebook_min_events_per_row,
+        codebook_learning_seed=args.codebook_learning_seed,
         kernel=args.kernel,
         n_scales=args.n_scales,
         n_sites=args.n_sites,
@@ -929,6 +1601,8 @@ def main():
         start_seconds=args.start_seconds,
         duration_seconds=args.duration_seconds,
         resume=args.resume,
+        torch_profile_dir=args.torch_profile_dir,
+        torch_profile_chunk=args.torch_profile_chunk,
     )
 
 
