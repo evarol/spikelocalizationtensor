@@ -41,6 +41,6 @@ singularity exec --nv --overlay /scratch/${USER}/_ENVS/ibl-sorter.ext3:ro \
         $RECORDING $OUTPUT_DIR --q-values 4 8 16 32 64 \
         --start-seconds 60 --chunk-seconds 1 --detection-threshold 6 \
         --isolation-ms 1 --max-events 100000 --max-events-per-chunk 2048 \
-        --seed 2026 --n-iters 10 --assignment-batch-size 65536 --device cuda"
+        --seed 42 --n-iters 10 --assignment-batch-size 65536 --device cuda"
 
 echo "Completed: $(date)"

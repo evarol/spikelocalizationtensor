@@ -375,7 +375,7 @@ def main():
     parser.add_argument("--filter-order", type=int, default=3)
     parser.add_argument("--max-events", type=int, default=100000)
     parser.add_argument("--max-events-per-chunk", type=int, default=2048)
-    parser.add_argument("--seed", type=int, default=2026)
+    parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--n-iters", type=int, default=10)
     parser.add_argument("--tolerance", type=float, default=1e-5)
     parser.add_argument("--assignment-batch-size", type=int, default=65536)

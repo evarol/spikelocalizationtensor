@@ -20,11 +20,10 @@ CODEBOOK_DIR=${CODEBOOK_DIR:?set CODEBOOK_DIR to the peak-channel codebook run}
 Q_VALUES=(4 8 16 32 64)
 Q=${Q_VALUES[$SLURM_ARRAY_TASK_ID]}
 CODEBOOK=$CODEBOOK_DIR/global_codebook_q${Q}.npz
-CALIBRATION=$CODEBOOK_DIR/global_codebook_thresholds.json
-OUTPUT=$SESSION/peak_channel_codebook_pursuit_q${Q}_matched_${SLURM_ARRAY_JOB_ID}_${SLURM_ARRAY_TASK_ID}
+OUTPUT=$SESSION/peak_channel_codebook_pursuit_q${Q}_fixed_${SLURM_ARRAY_JOB_ID}_${SLURM_ARRAY_TASK_ID}
 
-if [[ ! -e "$RECORDING" || ! -e "$CODEBOOK" || ! -e "$CALIBRATION" ]]; then
-    echo "missing recording, codebook, or calibration" >&2
+if [[ ! -e "$RECORDING" || ! -e "$CODEBOOK" ]]; then
+    echo "missing recording or codebook" >&2
     exit 2
 fi
 if [[ -e "$OUTPUT" ]]; then
@@ -35,6 +34,7 @@ fi
 echo "=== frozen peak-channel Q=$Q greedy pursuit ==="
 echo "Job ID: $SLURM_JOB_ID"
 echo "Codebook: $CODEBOOK"
+echo "Fixed detection threshold: 6"
 echo "Early-stop energy threshold: 0.002"
 echo "Output: $OUTPUT"
 echo "Start: $(date)"
@@ -44,8 +44,8 @@ singularity exec --nv --overlay /scratch/${USER}/_ENVS/ibl-sorter.ext3:ro \
     /bin/bash -c "source /ext3/env.sh && cd $ROOT && python \
         src/preprocessing/run_global_codebook_pursuit.py \
         $RECORDING $CODEBOOK $OUTPUT \
-        --threshold-mode matched --threshold-calibration $CALIBRATION \
-        --fixed-threshold 6 --duration-seconds 8.748 --chunk-seconds 2.187 \
+        --threshold-mode fixed --fixed-threshold 6 \
+        --duration-seconds 8.748 --chunk-seconds 2.187 \
         --pursuit-rounds 60 --pursuit-min-round-energy-drop-fraction 0.002 \
         --max-peaks-per-round 10000 --fit-batch-size 1024 \
         --localization-config-batch-size 32 --template-time-batch 4096 \
