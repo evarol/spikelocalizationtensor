@@ -76,7 +76,7 @@ def main():
         min_delta_chi2=args.min_delta_chi2,
         codebook_learning_chunks=0,
         kernel="monopole",
-        n_scales=10,
+        n_scales=9,
         n_sites=16,
         refine_levels=6,
         continuous_refine=True,

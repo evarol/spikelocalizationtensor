@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH --job-name=plot_first_fit_q8_z1
+#SBATCH --job-name=plot_first_fit_q8_z1_s2
 #SBATCH --output=/scratch/ap7151/iclr-paper/ANALYTIC_APPROACH/slurm_logs/%x_%j.out
 #SBATCH --error=/scratch/ap7151/iclr-paper/ANALYTIC_APPROACH/slurm_logs/%x_%j.err
 #SBATCH --time=00:30:00

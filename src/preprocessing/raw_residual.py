@@ -52,7 +52,7 @@ class ResidualConfig:
     codebook_min_events_per_row: int = 32
     codebook_learning_seed: int = 42
     kernel: str = "monopole"
-    n_scales: int = 10
+    n_scales: int = 9
     n_sites: int = 16
     refine_levels: int = 6
     continuous_refine: bool = True
@@ -1589,7 +1589,7 @@ def main():
     parser.add_argument("--codebook-min-events-per-row", type=int, default=32)
     parser.add_argument("--codebook-learning-seed", type=int, default=42)
     parser.add_argument("--kernel", default="monopole")
-    parser.add_argument("--n-scales", type=int, default=10)
+    parser.add_argument("--n-scales", type=int, default=9)
     parser.add_argument("--n-sites", type=int, default=16)
     parser.add_argument("--refine-levels", type=int, default=6)
     parser.add_argument(

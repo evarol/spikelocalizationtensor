@@ -105,11 +105,12 @@ KERNELS = {
 NEEDS_2 = {"power", "student", "yukawa", "dog"}
 
 
-def build_profiles(kernels=("monopole",), n_scales=10, sig_lo=1.0, sig_hi=512.0,
+def build_profiles(kernels=("monopole",), n_scales=9, sig_lo=2.0, sig_hi=512.0,
                    n_aniso=0, extra=(2.0,)):
     """A list of (kernel_name, params); the candidate is (lattice site, profile).
 
     Isotropic families get n_scales log-spaced sigmas over [sig_lo, sig_hi] um.
+    Defaults are the nine dyadic scales 2, 4, ..., 512 um.
     Anisotropic ones get an n_aniso x n_aniso grid of (lateral, axial) scales.
     Two-parameter radial families cross each sigma with the `extra` shape value.
 
@@ -704,7 +705,7 @@ def fit_spike_model(
     Y,
     Q=8,
     kernels=("monopole",),
-    n_scales=10,
+    n_scales=9,
     n_sites=16,
     n_iters=8,
     tol=1e-5,
@@ -876,7 +877,7 @@ def localize_spikes_fixed_codebook(
     Y,
     omega,
     kernels=("monopole",),
-    n_scales=10,
+    n_scales=9,
     n_sites=16,
     refine_levels=6,
     continuous=False,
@@ -1059,7 +1060,7 @@ def reconstruct_spike_fits(
     temporal_idx,
     alpha,
     kernels=("monopole",),
-    n_scales=10,
+    n_scales=9,
     device=None,
 ):
     """Reconstruct a batch of localized spikes as alpha * g * Omega[q]."""
@@ -1122,7 +1123,7 @@ def build_codebook_detection_footprints(
     mask,
     anchor_xy,
     kernels=("monopole",),
-    n_scales=10,
+    n_scales=9,
     device="cpu",
 ):
     """Build anchor-centered spatial atoms for full-time template detection."""
@@ -1166,7 +1167,7 @@ def greedy_matching_pursuit(
     Y,
     Q=8,
     kernels=("monopole",),
-    n_scales=10,
+    n_scales=9,
     n_sites=16,
     epsilon=1e-3,
     tol_gain=1e-4,
