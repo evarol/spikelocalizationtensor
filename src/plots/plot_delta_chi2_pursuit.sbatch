@@ -14,7 +14,7 @@ set -euo pipefail
 ROOT=/scratch/ap7151/iclr-paper/ANALYTIC_APPROACH
 BASELINE=$ROOT/runs/dataset1_p1/peak_channel_codebook_pursuit_q8_fixed_16358281_1
 GATED=$ROOT/runs/dataset1_p1/peak_channel_q8_delta_chi2_16375246
-OUTPUT=$ROOT/out/plots/peak_channel_q8_delta_chi2_16375246.png
+OUTPUT=$ROOT/out/plots/peak_channel_codebook/peak_channel_q8_delta_chi2_16375246.png
 
 singularity exec --overlay /scratch/${USER}/_ENVS/pytorch.ext3:ro \
     /share/apps/images/cuda12.8.1-cudnn9.8.0-ubuntu24.04.2.sif \
