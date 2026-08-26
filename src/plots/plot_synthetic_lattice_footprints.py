@@ -101,6 +101,18 @@ def main() -> None:
             va="bottom",
             bbox={"facecolor": "white", "edgecolor": "0.7", "pad": 2},
         )
+        xz = spatial.inset_axes((0.54, 0.49, 0.42, 0.30))
+        xz.scatter(CHANNEL_XY[:, 0], np.zeros(len(CHANNEL_XY)), s=12, color="0.25")
+        xz.scatter(source[0], source[2], marker="x", s=42, color="#d62728", linewidths=1.5)
+        xz.set(
+            xlim=(-3, 20),
+            ylim=(0, 70),
+            xticks=(0, 16),
+            yticks=(0, 30, 60),
+            title="x-z",
+        )
+        xz.tick_params(labelsize=6)
+        xz.grid(alpha=0.2)
 
         waveform = figure.add_subplot(grid[1, column])
         for channel, color in enumerate(colors):
