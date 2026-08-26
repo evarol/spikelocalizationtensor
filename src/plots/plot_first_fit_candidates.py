@@ -8,7 +8,6 @@ import matplotlib
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
-from matplotlib.backends.backend_pdf import PdfPages
 import numpy as np
 
 
@@ -19,10 +18,11 @@ def choose_rows(path, quantiles):
         return []
     order = np.argsort(values, kind="stable")
     positions = np.rint(np.asarray(quantiles) * (len(order) - 1)).astype(np.int64)
-    return np.unique(order[positions]).tolist()
+    selected = order[positions]
+    return selected[np.r_[True, selected[1:] != selected[:-1]]].tolist()
 
 
-def plot_candidate(pdf, chunk_index, row_index, archive, fs):
+def plot_candidate(output, chunk_index, row_index, archive, fs):
     observed = archive["observed"][row_index]
     reconstructed = archive["reconstructed"][row_index]
     residual = archive["residual"][row_index]
@@ -57,9 +57,10 @@ def plot_candidate(pdf, chunk_index, row_index, archive, fs):
         f"temporal row {archive['temporal_idx'][row_index]}",
         fontsize=11,
     )
-    pdf.savefig(figure, dpi=800, bbox_inches="tight")
+    image_path = output / f"chunk_{chunk_index:02d}_row_{row_index:04d}.png"
+    figure.savefig(image_path, dpi=800, bbox_inches="tight")
     plt.close(figure)
-    return total_delta
+    return total_delta, image_path.name
 
 
 def main():
@@ -75,25 +76,29 @@ def main():
         raise FileNotFoundError("first-fit diagnostic has no chunk files")
     args.output.mkdir(parents=True, exist_ok=True)
     selected = []
-    with PdfPages(args.output / "first_fit_waveform_gallery.pdf") as pdf:
-        for chunk_index, path in enumerate(paths):
-            rows = choose_rows(path, args.quantiles)
-            with np.load(path, allow_pickle=False) as archive:
-                for row_index in rows:
-                    total_delta = plot_candidate(
-                        pdf, chunk_index, row_index, archive, float(metadata["fs"])
-                    )
-                    selected.append(
-                        {
-                            "chunk_index": chunk_index,
-                            "row_index": row_index,
-                            "total_delta_chi2": total_delta,
-                        }
-                    )
+    for chunk_index, path in enumerate(paths):
+        rows = choose_rows(path, args.quantiles)
+        with np.load(path, allow_pickle=False) as archive:
+            for row_index in rows:
+                total_delta, image_name = plot_candidate(
+                    args.output,
+                    chunk_index,
+                    row_index,
+                    archive,
+                    float(metadata["fs"]),
+                )
+                selected.append(
+                    {
+                        "chunk_index": chunk_index,
+                        "row_index": row_index,
+                        "total_delta_chi2": total_delta,
+                        "image": image_name,
+                    }
+                )
     (args.output / "gallery_selection.json").write_text(
         json.dumps(selected, indent=2) + "\n"
     )
-    print(f"wrote {len(selected)} first-fit pages to {args.output}", flush=True)
+    print(f"wrote {len(selected)} first-fit images to {args.output}", flush=True)
 
 
 if __name__ == "__main__":
