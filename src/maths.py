@@ -134,9 +134,10 @@ def build_profiles(kernels=("monopole",), n_scales=10, sig_lo=1.0, sig_hi=512.0,
 # Spatial codebook.
 # The full codebook is the implicit 1 um voxel grid. A small uniform subset is
 # materialized for the coarse assignment, then each spike is refined on the
-# integer grid without ever allocating all 301^3 locations.
+# integer grid without ever allocating all locations. Sources are constrained to
+# lie at least 1 um off the recording plane.
 # --------------------------------------------------------------------------- #
-VOXEL_LO = (-150, -150, 0)
+VOXEL_LO = (-150, -150, 1)
 VOXEL_HI = (150, 150, 300)
 VOXEL_SIZE_UM = 1
 
