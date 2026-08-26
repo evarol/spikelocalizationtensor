@@ -58,7 +58,7 @@ def plot_candidate(pdf, chunk_index, row_index, archive, fs):
         f"temporal row {archive['temporal_idx'][row_index]}",
         fontsize=11,
     )
-    figure.savefig(pdf, dpi=800, bbox_inches="tight")
+    pdf.savefig(figure, dpi=800, bbox_inches="tight")
     plt.close(figure)
     return total_delta
 
