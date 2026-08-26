@@ -147,7 +147,7 @@ def build_figure():
     ax.text(
         0.5,
         0.930,
-        "learn temporal shapes once → dense template scoring → IBL-style projection-threshold local maxima → fit and subtract",
+        "learn temporal shapes once → constrained spatial scoring → IBL-style projection-threshold maxima → fit and subtract",
         ha="center",
         va="center",
         fontsize=11,
@@ -199,7 +199,7 @@ def build_figure():
     )
     pursuit_score = node(
         ax, 0.230, 0.390, 0.145, 0.095,
-        "① Dense scoring", "convolve every window\nover rows × spatial scales", COLORS["green"], body_size=7.5
+        "① Dense scoring", "convolve every window\nover rows × anchored footprints", COLORS["green"], body_size=7.5
     )
     pursuit_detect = node(
         ax, 0.405, 0.390, 0.145, 0.095,
@@ -207,11 +207,11 @@ def build_figure():
     )
     localize = node(
         ax, 0.580, 0.390, 0.165, 0.095,
-        "③ Localize + reconstruct", "fit source, scale, row, gain\non multichannel residual", COLORS["green"], body_size=7.5
+        "③ Localize + reconstruct", "fit xyz, sigma, row, signed gain\non the 8-channel residual", COLORS["green"], body_size=7.5
     )
     subtract = node(
         ax, 0.775, 0.390, 0.165, 0.095,
-        "④ Refit gain + subtract", "accept only positive reduction\nand ≥5% captured energy", COLORS["red"], body_size=7.5
+        "④ Refit gain + subtract", "accept positive residual reduction\nthrough configured capture / Delta chi2 gates", COLORS["red"], body_size=7.0
     )
     for left, right in zip(
         (pursuit_input, pursuit_score, pursuit_detect, localize),
@@ -219,14 +219,21 @@ def build_figure():
     ):
         arrow(ax, edge(left, "right"), edge(right, "left"))
 
+    spatial_bank = node(
+        ax, 0.405, 0.320, 0.340, 0.050,
+        "Active monopole bank", "sigma = 2, 4, ..., 512 um; fit x,y in [-150, 150] um and z in [1, 300] um.  sigma=1 and z=0 are excluded.",
+        COLORS["orange"], title_size=8.4, body_size=6.7
+    )
+    arrow(ax, edge(spatial_bank, "top"), edge(localize, "bottom"), COLORS["arrow"], 1.3)
+
     guard = node(
-        ax, 0.600, 0.245, 0.340, 0.064,
+        ax, 0.600, 0.225, 0.340, 0.064,
         "Round guard", "keep the round only if fractional core-energy drop ≥ 0.002 · stop by round 60", COLORS["red"], title_size=8.8, body_size=7.1
     )
     arrow(ax, edge(subtract, "bottom"), edge(guard, "top"), COLORS["feedback"], 1.8)
     guard_left = edge(guard, "left")
     score_bottom = edge(pursuit_score, "bottom")
-    feedback_y = 0.335
+    feedback_y = 0.305
     ax.plot(
         [guard_left[0], score_bottom[0], score_bottom[0]],
         [guard_left[1], guard_left[1], feedback_y],
@@ -236,8 +243,8 @@ def build_figure():
     )
     arrow(ax, (score_bottom[0], feedback_y), score_bottom, COLORS["feedback"], 1.9)
     ax.text(
-        0.455,
-        0.277,
+        0.390,
+        0.235,
         "accepted round → updated residual → score again",
         ha="center",
         va="center",
@@ -250,7 +257,7 @@ def build_figure():
 
     node(
         ax, 0.030, 0.045, 0.650, 0.095,
-        "OUTPUT", "accepted events: time · channel · xyz · scale · temporal row · gain · projection score · energy · round\ncompare the five independent fixed projection-threshold Q runs", COLORS["gray"], title_size=10.5, body_size=8.0
+        "OUTPUT", "accepted events: time · channel · xyz (z >= 1 um) · sigma (>= 2 um) · temporal row · signed gain · projection score · energy · round\ncompare the five independent fixed projection-threshold Q runs", COLORS["gray"], title_size=10.5, body_size=7.6
     )
     node(
         ax, 0.720, 0.045, 0.250, 0.095,

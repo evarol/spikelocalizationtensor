@@ -63,7 +63,7 @@ def main():
         raise ValueError("residual localization arrays have inconsistent shapes")
 
     n_scales = int(config["n_scales"])
-    sigmas = np.geomspace(1.0, 512.0, n_scales)
+    sigmas = np.geomspace(2.0, 512.0, n_scales)
     profile_idx = np.asarray(profile_idx, dtype=np.int64)
     if np.any((profile_idx < 0) | (profile_idx >= n_scales)):
         raise ValueError("profile_idx contains an index outside the monopole scale bank")

@@ -13,8 +13,8 @@ import numpy as np
 EPS = 1e-12
 
 
-def profile_parameters(kernel, profile_idx, n_scales=10):
-    scales = np.geomspace(1.0, 512.0, n_scales)
+def profile_parameters(kernel, profile_idx, n_scales=9):
+    scales = np.geomspace(2.0, 512.0, n_scales)
     if kernel in ("gauss_aniso", "mono_aniso"):
         lateral, axial = np.meshgrid(scales, scales, indexing="ij")
         parameters = np.column_stack((lateral.ravel(), axial.ravel()))

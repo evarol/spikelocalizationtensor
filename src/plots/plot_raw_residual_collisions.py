@@ -39,7 +39,7 @@ def validate_run(run):
 
 
 def effective_width(sources, profile_idx, n_scales):
-    sigma = np.geomspace(1.0, 512.0, n_scales)[
+    sigma = np.geomspace(2.0, 512.0, n_scales)[
         np.asarray(profile_idx, dtype=np.int64)
     ]
     return np.sqrt(np.asarray(sources[:, 2], dtype=np.float64) ** 2 + sigma ** 2)

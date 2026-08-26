@@ -23,10 +23,11 @@ CHANNEL_XY = np.array(
 )
 
 CASES = (
-    ("near contact", (16.0, 10.0, 1.0), 1.0),
-    ("near, wider", (16.0, 10.0, 8.0), 8.0),
-    ("between contacts", (8.0, 0.0, 20.0), 16.0),
-    ("deep, broad", (8.0, 0.0, 60.0), 64.0),
+    ("excluded: near delta", (16.0, 10.0, 1.0), 1.0, False),
+    ("minimum active scale", (16.0, 10.0, 1.0), 2.0, True),
+    ("near, wider", (16.0, 10.0, 8.0), 8.0, True),
+    ("between contacts", (8.0, 0.0, 20.0), 16.0, True),
+    ("deep, broad", (8.0, 0.0, 60.0), 64.0, True),
 )
 
 
@@ -58,10 +59,10 @@ def main() -> None:
     omega_ptp = np.ptp(omega)
     target_peak_ptp_uv = 50.0
     colors = plt.get_cmap("viridis")(np.linspace(0.1, 0.9, len(CHANNEL_XY)))
-    figure = plt.figure(figsize=(16, 7.4), constrained_layout=True)
+    figure = plt.figure(figsize=(20, 7.4), constrained_layout=True)
     grid = figure.add_gridspec(2, len(CASES), height_ratios=(1.0, 1.25))
 
-    for column, (name, source, sigma) in enumerate(CASES):
+    for column, (name, source, sigma, active) in enumerate(CASES):
         footprint = normalized_monopole(source, sigma)
         alpha_uv = target_peak_ptp_uv / (footprint.max() * omega_ptp)
         channel_ptp_uv = alpha_uv * footprint * omega_ptp
@@ -92,6 +93,7 @@ def main() -> None:
             aspect="equal",
         )
         spatial.grid(alpha=0.2)
+        spatial.title.set_color("#b54a3f" if not active else "#183047")
         spatial.text(
             0.02,
             0.02,
@@ -129,7 +131,7 @@ def main() -> None:
         waveform.legend(fontsize=7, ncol=2, frameon=False, loc="lower right")
 
     figure.suptitle(
-        "Synthetic normalized monopole codebook candidates: same peak PTP, different spatial spread",
+        "Synthetic normalized monopole footprints: sigma=1 is shown only as the excluded near-delta comparison",
         fontsize=14,
     )
     args.output.parent.mkdir(parents=True, exist_ok=True)
