@@ -18,9 +18,8 @@ def choose_rows(path, quantiles):
     if not len(values):
         return []
     order = np.argsort(values, kind="stable")
-    return np.unique(
-        np.rint(np.asarray(quantiles) * (len(order) - 1)).astype(np.int64)
-    ).tolist()
+    positions = np.rint(np.asarray(quantiles) * (len(order) - 1)).astype(np.int64)
+    return np.unique(order[positions]).tolist()
 
 
 def plot_candidate(pdf, chunk_index, row_index, archive, fs):
