@@ -61,6 +61,7 @@ class ResidualConfig:
     device: str = "cuda"
     save_waveforms: bool = False
     profile_stages: bool = False
+    min_delta_chi2: float = 0.0
 
 
 def channel_neighborhoods(channel_positions, radius_um):
@@ -350,12 +351,17 @@ def subtract_predictions_monotone(
     n_before,
     n_after,
     min_captured_fraction=0.0,
+    min_delta_chi2=0.0,
+    noise=None,
 ):
+    if min_delta_chi2 > 0 and noise is None:
+        raise ValueError("min_delta_chi2 > 0 requires the per-channel noise array")
     accepted = np.zeros(len(times), dtype=bool)
     scale = np.zeros(len(times), dtype=np.float32)
     input_energy = np.zeros(len(times), dtype=np.float32)
     captured_energy = np.zeros(len(times), dtype=np.float32)
     captured_fraction = np.zeros(len(times), dtype=np.float32)
+    delta_chi2 = np.full(len(times), np.inf, dtype=np.float32)
     waveforms = np.zeros_like(prediction, dtype=np.float32)
     tiny = np.finfo(np.float32).tiny
     for index, (time, row_ids, row_mask, model) in enumerate(
@@ -371,6 +377,29 @@ def subtract_predictions_monotone(
             continue
         response = float(np.sum(current * atom))
         fitted_scale = response / model_energy
+        delta_chi2_value = np.float32(np.inf)
+        if min_delta_chi2 > 0:
+            noise_sigma = np.abs(
+                np.asarray(noise[row_ids[row_mask]], dtype=np.float32)
+            )
+            if (
+                not np.all(np.isfinite(noise_sigma))
+                or np.any(noise_sigma <= 0)
+            ):
+                continue
+            inv_variance = 1.0 / np.square(noise_sigma)
+            weighted_response = float((current * atom).sum(-1) @ inv_variance)
+            weighted_atom_norm = float(np.square(atom).sum(-1) @ inv_variance)
+            if (
+                not np.isfinite(weighted_response)
+                or not np.isfinite(weighted_atom_norm)
+                or weighted_atom_norm <= tiny
+            ):
+                continue
+            fitted_scale = weighted_response / weighted_atom_norm
+            delta_chi2_value = np.float32(
+                np.square(weighted_response) / weighted_atom_norm
+            )
         adjusted = fitted_scale * atom
         candidate = current - adjusted
         reduction = energy - float(np.square(candidate).sum())
@@ -380,6 +409,13 @@ def subtract_predictions_monotone(
             or not np.isfinite(reduction)
             or reduction <= 0
             or fraction < min_captured_fraction
+            or (
+                min_delta_chi2 > 0
+                and (
+                    not np.isfinite(delta_chi2_value)
+                    or delta_chi2_value < min_delta_chi2
+                )
+            )
         ):
             continue
         waveforms[index, row_mask] = current
@@ -391,12 +427,14 @@ def subtract_predictions_monotone(
         input_energy[index] = energy
         captured_energy[index] = reduction
         captured_fraction[index] = fraction
+        delta_chi2[index] = delta_chi2_value
     return {
         "accepted": accepted,
         "scale": scale,
         "input_energy": input_energy,
         "captured_energy": captured_energy,
         "captured_fraction": captured_fraction,
+        "delta_chi2": delta_chi2,
         "waveforms": waveforms,
     }
 
@@ -507,6 +545,7 @@ def _empty_result(width, waveform_length, save_waveforms):
         "input_energy": np.empty(0, dtype=np.float32),
         "captured_energy": np.empty(0, dtype=np.float32),
         "captured_fraction": np.empty(0, dtype=np.float32),
+        "delta_chi2": np.empty(0, dtype=np.float32),
         "continuous_displacement_um": np.empty(0, dtype=np.float32),
         "continuous_energy_gain": np.empty(0, dtype=np.float32),
         "pass_energy_drop_fraction": np.empty(0, dtype=np.float32),
@@ -688,6 +727,8 @@ def _peel_preprocessed_chunk_legacy(
                     n_before,
                     n_after,
                     min_captured_fraction=config.min_captured_fraction,
+                    min_delta_chi2=config.min_delta_chi2,
+                    noise=noise,
                 )
             profile_stop(timings, "subtraction", started)
             accepted[:] = False
@@ -700,11 +741,13 @@ def _peel_preprocessed_chunk_legacy(
             fitted_input_energy = np.zeros(len(fitted_alpha), dtype=np.float32)
             fitted_captured_energy = np.zeros(len(fitted_alpha), dtype=np.float32)
             fitted_captured_fraction = np.zeros(len(fitted_alpha), dtype=np.float32)
+            fitted_delta_chi2 = np.full(len(fitted_alpha), np.inf, dtype=np.float32)
             fitted_waveforms = np.zeros_like(waveforms, dtype=np.float32)
             fitted_alpha[selected] *= subtraction["scale"]
             fitted_input_energy[selected] = subtraction["input_energy"]
             fitted_captured_energy[selected] = subtraction["captured_energy"]
             fitted_captured_fraction[selected] = subtraction["captured_fraction"]
+            fitted_delta_chi2[selected] = subtraction["delta_chi2"]
             fitted_waveforms[selected] = subtraction["waveforms"]
             in_core = (
                 (batch_times >= core_start)
@@ -741,6 +784,7 @@ def _peel_preprocessed_chunk_legacy(
                 "input_energy": fitted_input_energy[in_core],
                 "captured_energy": fitted_captured_energy[in_core],
                 "captured_fraction": fitted_captured_fraction[in_core],
+                "delta_chi2": fitted_delta_chi2[in_core],
                 "continuous_displacement_um": fit[
                     "continuous_displacement_um"
                 ][in_core].astype(np.float32),
@@ -966,6 +1010,8 @@ def _peel_preprocessed_chunk_pursuit(
                     n_before,
                     n_after,
                     min_captured_fraction=config.min_captured_fraction,
+                    min_delta_chi2=config.min_delta_chi2,
+                    noise=noise,
                 )
             profile_stop(timings, "subtraction", started)
             accepted[:] = False
@@ -978,11 +1024,13 @@ def _peel_preprocessed_chunk_pursuit(
             fitted_input_energy = np.zeros(len(fitted_alpha), dtype=np.float32)
             fitted_captured_energy = np.zeros(len(fitted_alpha), dtype=np.float32)
             fitted_captured_fraction = np.zeros(len(fitted_alpha), dtype=np.float32)
+            fitted_delta_chi2 = np.full(len(fitted_alpha), np.inf, dtype=np.float32)
             fitted_waveforms = np.zeros_like(waveforms, dtype=np.float32)
             fitted_alpha[selected] *= subtraction["scale"]
             fitted_input_energy[selected] = subtraction["input_energy"]
             fitted_captured_energy[selected] = subtraction["captured_energy"]
             fitted_captured_fraction[selected] = subtraction["captured_fraction"]
+            fitted_delta_chi2[selected] = subtraction["delta_chi2"]
             fitted_waveforms[selected] = subtraction["waveforms"]
 
             subtraction_accepted = subtraction["accepted"]
@@ -1037,6 +1085,7 @@ def _peel_preprocessed_chunk_pursuit(
                 "input_energy": fitted_input_energy[in_core],
                 "captured_energy": fitted_captured_energy[in_core],
                 "captured_fraction": fitted_captured_fraction[in_core],
+                "delta_chi2": fitted_delta_chi2[in_core],
                 "continuous_displacement_um": fit[
                     "continuous_displacement_um"
                 ][in_core].astype(np.float32),
@@ -1534,6 +1583,7 @@ def main():
     parser.add_argument(
         "--pursuit-min-round-energy-drop-fraction", type=float, default=0.0
     )
+    parser.add_argument("--min-delta-chi2", type=float, default=0.0)
     parser.add_argument("--codebook-learning-chunks", type=int, default=0)
     parser.add_argument("--codebook-momentum", type=float, default=0.9)
     parser.add_argument("--codebook-min-events-per-row", type=int, default=32)
@@ -1578,6 +1628,7 @@ def main():
         pursuit_min_round_energy_drop_fraction=(
             args.pursuit_min_round_energy_drop_fraction
         ),
+        min_delta_chi2=args.min_delta_chi2,
         codebook_learning_chunks=args.codebook_learning_chunks,
         codebook_momentum=args.codebook_momentum,
         codebook_min_events_per_row=args.codebook_min_events_per_row,

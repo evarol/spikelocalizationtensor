@@ -39,6 +39,8 @@ def main():
     parser.add_argument("--chunk-seconds", type=float, default=2.187)
     parser.add_argument("--pursuit-rounds", type=int, default=60)
     parser.add_argument("--pursuit-min-round-energy-drop-fraction", type=float, default=0.0)
+    parser.add_argument("--min-captured-fraction", type=float, default=0.05)
+    parser.add_argument("--min-delta-chi2", type=float, default=0.0)
     parser.add_argument("--max-peaks-per-round", type=int, default=10000)
     parser.add_argument("--fit-batch-size", type=int, default=1024)
     parser.add_argument("--localization-config-batch-size", type=int, default=32)
@@ -61,7 +63,7 @@ def main():
     )
     config = ResidualConfig(
         threshold=threshold,
-        min_captured_fraction=0.05,
+        min_captured_fraction=args.min_captured_fraction,
         chunk_seconds=args.chunk_seconds,
         max_peaks_per_round=args.max_peaks_per_round,
         fit_batch_size=args.fit_batch_size,
@@ -71,6 +73,7 @@ def main():
         pursuit_min_round_energy_drop_fraction=(
             args.pursuit_min_round_energy_drop_fraction
         ),
+        min_delta_chi2=args.min_delta_chi2,
         codebook_learning_chunks=0,
         kernel="monopole",
         n_scales=10,
