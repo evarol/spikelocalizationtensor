@@ -18,15 +18,11 @@ def _normalize(x):
 
 
 def _continuous_refine(off, projected, temporal, source_grid, profile_index,
-                       profiles, transform, mask, max_iterations, backtracks):
+                       profile_sigmas, transform, mask, max_iterations, backtracks):
     """Refine fixed whitened monopole fits inside their final 1 um cells."""
     n_events = len(source_grid)
     rows = torch.arange(n_events, device=off.device)
-    sigma = torch.as_tensor(
-        [profiles[index][1][0] for index in profile_index.tolist()],
-        dtype=off.dtype,
-        device=off.device,
-    )
+    sigma = profile_sigmas[profile_index]
     lower = (source_grid - 0.5).clamp(
         min=torch.as_tensor(VOXEL_LO, dtype=off.dtype, device=off.device),
         max=torch.as_tensor(VOXEL_HI, dtype=off.dtype, device=off.device),
@@ -86,15 +82,12 @@ def _continuous_refine(off, projected, temporal, source_grid, profile_index,
 
 
 def _continuous_refine_rho(off, projected, temporal, source_grid, profile_index,
-                           profiles, transform, mask, max_iterations,
+                           profile_sigmas, transform, mask, max_iterations,
                            backtracks):
     """Refine an identifiable monopole state `(x, y, rho)`."""
     n_events = len(source_grid)
     rows = torch.arange(n_events, device=off.device)
-    sigma = torch.as_tensor(
-        [profiles[index][1][0] for index in profile_index.tolist()],
-        dtype=off.dtype, device=off.device,
-    )
+    sigma = profile_sigmas[profile_index]
     rho_grid = torch.sqrt(source_grid[:, 2].square() + sigma.square())
     state_grid = torch.cat((source_grid[:, :2], rho_grid[:, None]), dim=1)
     xy_lower = (source_grid[:, :2] - 0.5).clamp(
@@ -164,6 +157,17 @@ def _atoms(off, sources, profiles, transform, mask):
         white = torch.einsum("bkc,bcd->bkd", raw, transform)
         atoms.append(_normalize(white * mask[:, None]))
     return torch.stack(atoms, dim=-1)
+
+
+def _selected_monopole_atoms(off, candidates, profile_sigmas, profile_index,
+                             transform, mask):
+    dxy2 = (
+        (off[:, None, :, 0] - candidates[:, :, None, 0]).square()
+        + (off[:, None, :, 1] - candidates[:, :, None, 1]).square()
+    )
+    sigma = profile_sigmas[profile_index][:, None, None]
+    raw = sigma / torch.sqrt(dxy2 + candidates[:, :, None, 2].square() + sigma.square())
+    return _normalize(torch.einsum("bkc,bcd->bkd", raw, transform) * mask[:, None])
 
 
 def _choose(off, projected, omega, sources, profiles, transform, mask,
@@ -248,6 +252,10 @@ def localize_spikes_fixed_codebook(
     if omega_np.shape[1] != n_time:
         raise ValueError("omega and waveform lengths differ")
     profiles = build_profiles(kernels, n_scales)
+    profile_sigmas = torch.as_tensor(
+        [params[0] for _, params in profiles], dtype=torch.float32, device=device
+    )
+    monopole_profiles = all(name == "monopole" for name, _ in profiles)
     sites = lattice(n_sites).to(device)
     values = torch.as_tensor(values_np, device=device)
     offsets = torch.as_tensor(off_np, device=device)
@@ -268,12 +276,17 @@ def localize_spikes_fixed_codebook(
         )[None]
         for dimension in range(3):
             candidates[..., dimension].clamp_(VOXEL_LO[dimension], VOXEL_HI[dimension])
-        chosen_profiles = [profiles[index] for index in profile_index.cpu().tolist()]
-        raw = torch.empty((n_events, len(candidates[0]), n_channels), device=device)
-        for index, (name, params) in enumerate(chosen_profiles):
-            dxy2 = ((offsets[index, :, 0][None] - candidates[index, :, 0, None]).square() + (offsets[index, :, 1][None] - candidates[index, :, 1, None]).square())
-            raw[index] = KERNELS[name](dxy2, candidates[index, :, 2, None].square(), params)
-        atoms = _normalize(torch.einsum("bkc,bcd->bkd", raw, transforms) * valid[:, None])
+        if monopole_profiles:
+            atoms = _selected_monopole_atoms(
+                offsets, candidates, profile_sigmas, profile_index, transforms, valid
+            )
+        else:
+            chosen_profiles = [profiles[index] for index in profile_index.cpu().tolist()]
+            raw = torch.empty((n_events, len(candidates[0]), n_channels), device=device)
+            for index, (name, params) in enumerate(chosen_profiles):
+                dxy2 = ((offsets[index, :, 0][None] - candidates[index, :, 0, None]).square() + (offsets[index, :, 1][None] - candidates[index, :, 1, None]).square())
+                raw[index] = KERNELS[name](dxy2, candidates[index, :, 2, None].square(), params)
+            atoms = _normalize(torch.einsum("bkc,bcd->bkd", raw, transforms) * valid[:, None])
         response = torch.einsum("bkc,bcq->bkq", atoms, projected)
         score = response.square() / temporal.square().sum(1)[None, None]
         flat = score.flatten(1).argmax(1)
@@ -304,17 +317,12 @@ def localize_spikes_fixed_codebook(
     atom = atoms[torch.arange(n_events, device=device), 0, :, profile_index]
     continuous_displacement = torch.zeros(n_events, device=device)
     continuous_energy_gain = torch.zeros(n_events, device=device)
-    rho = torch.sqrt(
-        source[:, 2].square()
-        + torch.as_tensor(
-            [profiles[index][1][0] for index in profile_index.cpu().tolist()],
-            dtype=offsets.dtype, device=device,
-        ).square()
-    )
+    selected_sigma = profile_sigmas[profile_index]
+    rho = torch.sqrt(source[:, 2].square() + selected_sigma.square())
     if identifiable_rho:
         source, rho, response, captured, continuous_displacement = _continuous_refine_rho(
             offsets, projected, temporal_index, sources_grid, profile_index,
-            profiles, transforms, valid, continuous_max_iterations,
+            profile_sigmas, transforms, valid, continuous_max_iterations,
             continuous_backtracks,
         )
         alpha = response
@@ -328,17 +336,13 @@ def localize_spikes_fixed_codebook(
     elif continuous:
         source, alpha, captured, continuous_displacement = _continuous_refine(
             offsets, projected, temporal_index, sources_grid, profile_index,
-            profiles, transforms, valid, continuous_max_iterations,
+            profile_sigmas, transforms, valid, continuous_max_iterations,
             continuous_backtracks,
         )
         continuous_energy_gain = captured - captured_before_continuous
         dxy2 = (
             (offsets[:, :, 0] - source[:, None, 0]).square()
             + (offsets[:, :, 1] - source[:, None, 1]).square()
-        )
-        selected_sigma = torch.as_tensor(
-            [profiles[index][1][0] for index in profile_index.cpu().tolist()],
-            dtype=offsets.dtype, device=device,
         )
         raw = selected_sigma[:, None] / torch.sqrt(
             dxy2 + source[:, None, 2].square() + selected_sigma[:, None].square()
@@ -350,7 +354,7 @@ def localize_spikes_fixed_codebook(
         "sources": source.cpu().numpy().astype(np.float32),
         "sources_grid": sources_grid.cpu().numpy().astype(np.float32),
         "profile_idx": profile_index.cpu().numpy().astype(np.int16),
-        "sigma": np.asarray([profiles[i][1][0] for i in profile_index.cpu().tolist()], dtype=np.float32),
+        "sigma": selected_sigma.cpu().numpy().astype(np.float32),
         "rho": rho.cpu().numpy().astype(np.float32),
         "temporal_idx": temporal_index.cpu().numpy().astype(np.int16),
         "alpha": alpha.cpu().numpy().astype(np.float32),
