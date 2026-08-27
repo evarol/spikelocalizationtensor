@@ -11,7 +11,7 @@ from matplotlib.colors import Normalize
 import numpy as np
 from scipy.spatial import cKDTree
 
-from plot_reconstructions import profile_parameters, reconstruct
+from plot_raw_residual_reconstructions import reconstruct_saved_fit
 
 
 EPS = np.finfo(np.float32).tiny
@@ -333,18 +333,10 @@ def plot_collision_examples(run, metadata, examples, output):
         chunk = load_example(run, candidate)
         mask = chunk["neighbor_ids"] >= 0
         measured = chunk["residual_waveforms"] * mask[:, :, None]
-        parameters = profile_parameters(
-            config["kernel"], chunk["profile_idx"], int(config["n_scales"])
-        )
-        footprint, predicted = reconstruct(
-            chunk["local_coords"],
-            mask,
-            chunk["sources"],
-            parameters,
-            omega,
-            chunk["temporal_idx"],
-            chunk["alpha"],
-            config["kernel"],
+        footprint, predicted = reconstruct_saved_fit(
+            run, config, chunk["local_coords"], chunk["neighbor_ids"], mask,
+            chunk["sources"], chunk["profile_idx"], omega,
+            chunk["temporal_idx"], chunk["alpha"], chunk.get("rho"),
         )
         after = measured - predicted
         rho = effective_width(

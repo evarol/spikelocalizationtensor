@@ -71,6 +71,7 @@ class ResidualConfig:
     whitening_seed: int = 42
     max_channel_normalized_rmse: float = float("inf")
     use_0010_math: bool = False
+    identifiable_rho: bool = False
 
 
 def channel_neighborhoods(channel_positions, radius_um):
@@ -159,6 +160,34 @@ def estimate_whitening(data, positions, mode="none", radius_um=48.0,
         local = zca(sample[:, ids])
         transform[ids, channel] = local[:, np.flatnonzero(ids == channel)[0]]
     return transform, noise
+
+
+def sample_preprocessed_calibration(
+    reader, first_sample, stop_sample, n_channels, fs, config
+):
+    total = stop_sample - first_sample
+    target = min(total, max(1, config.whitening_max_samples))
+    segment_samples = min(target, max(1, int(round(fs))))
+    n_segments = int(np.ceil(target / segment_samples))
+    starts = np.linspace(
+        first_sample,
+        max(first_sample, stop_sample - segment_samples),
+        n_segments,
+        dtype=np.int64,
+    )
+    pieces = []
+    remaining = target
+    for start in starts:
+        length = min(segment_samples, remaining)
+        raw = reader[int(start):int(start + length), :n_channels]
+        pieces.append(
+            preprocess_voltage(
+                raw, fs, freq_min=config.freq_min,
+                freq_max=config.freq_max, order=config.filter_order,
+            )
+        )
+        remaining -= length
+    return np.concatenate(pieces, axis=0)
 
 
 def transform_local_footprints(prediction, ids, mask, whitening):
@@ -264,6 +293,7 @@ def localize_configured(local_coords, waveforms, ids, mask, omega, config,
             continuous=config.continuous_refine,
             continuous_max_iterations=config.continuous_max_iterations,
             continuous_backtracks=config.continuous_backtracks,
+            identifiable_rho=config.identifiable_rho,
             spatial_transform=local_whitening_transforms(
                 ids, mask, whitening_matrix
             ),
@@ -722,6 +752,7 @@ def _empty_result(width, waveform_length, save_waveforms):
         "local_coords": np.empty((0, width, 2), dtype=np.float32),
         "profile_idx": np.empty(0, dtype=np.int16),
         "sigma": np.empty(0, dtype=np.float32),
+        "rho": np.empty(0, dtype=np.float32),
         "temporal_idx": np.empty(0, dtype=np.int16),
         "alpha": np.empty(0, dtype=np.float32),
         "detection_score": np.empty(0, dtype=np.float32),
@@ -962,6 +993,7 @@ def _peel_preprocessed_chunk_legacy(
                 "local_coords": local_coords[in_core].astype(np.float32),
                 "profile_idx": fit["profile_idx"][in_core].astype(np.int16),
                 "sigma": fit["sigma"][in_core].astype(np.float32),
+                "rho": fit.get("rho", fit["sigma"])[in_core].astype(np.float32),
                 "temporal_idx": fit["temporal_idx"][in_core].astype(np.int16),
                 "alpha": fitted_alpha[in_core].astype(np.float32),
                 "detection_score": detection_score[start:stop][in_core].astype(
@@ -1122,16 +1154,21 @@ def _peel_preprocessed_chunk_pursuit(
                 threshold=config.threshold,
                 temporal_radius=temporal_radius,
                 n_before=n_before,
-                max_peaks=None,
+                max_peaks=(
+                    config.max_peaks_per_round
+                    if config.pursuit_lockout_ms is None
+                    else None
+                ),
             )
-            times, channels, detection_score = select_conflict_free_peaks(
-                times,
-                channels,
-                detection_score,
-                lockout_samples,
-                max_peaks=config.max_peaks_per_round,
-                spatial_neighbors=spatial_neighbors,
-            )
+            if config.pursuit_lockout_ms is not None:
+                times, channels, detection_score = select_conflict_free_peaks(
+                    times,
+                    channels,
+                    detection_score,
+                    lockout_samples,
+                    max_peaks=config.max_peaks_per_round,
+                    spatial_neighbors=spatial_neighbors,
+                )
         profile_stop(timings, "peak_selection", started)
         if not len(times):
             break
@@ -1267,6 +1304,7 @@ def _peel_preprocessed_chunk_pursuit(
                 "local_coords": local_coords[in_core].astype(np.float32),
                 "profile_idx": fit["profile_idx"][in_core].astype(np.int16),
                 "sigma": fit["sigma"][in_core].astype(np.float32),
+                "rho": fit.get("rho", fit["sigma"])[in_core].astype(np.float32),
                 "temporal_idx": fit["temporal_idx"][in_core].astype(np.int16),
                 "alpha": fitted_alpha[in_core].astype(np.float32),
                 "detection_score": detection_score[start:stop][in_core].astype(
@@ -1551,12 +1589,8 @@ def run_recording(
             )
         if requested_stop <= first_sample:
             raise ValueError("the requested recording interval is empty")
-        # The exact selected interval is the normalization reference, not a
-        # collection of independently normalized chunks.
-        whitening_raw = reader[first_sample:requested_stop, :n_channels]
-        whitening_data = preprocess_voltage(
-            whitening_raw, fs, freq_min=config.freq_min,
-            freq_max=config.freq_max, order=config.filter_order,
+        whitening_data = sample_preprocessed_calibration(
+            reader, first_sample, requested_stop, n_channels, fs, config
         )
         whitening_matrix, whitening_noise = estimate_whitening(
             whitening_data, channel_positions, mode=config.whitening,

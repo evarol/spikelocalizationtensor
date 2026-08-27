@@ -1,6 +1,7 @@
 """Plot spike depth over time, colored by selected temporal-codebook row."""
 
 import argparse
+import json
 from pathlib import Path
 
 import matplotlib
@@ -8,6 +9,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from matplotlib.colors import BoundaryNorm, ListedColormap
 import numpy as np
+from scipy.ndimage import gaussian_filter
 
 
 BACKGROUND = "#0d0d0d"
@@ -15,10 +17,29 @@ FONT = "#d7d7d7"
 GRID = "#292929"
 
 
+def categorical_raster(x, y, labels, palette, xlim, ylim, nx, ny):
+    ix = np.floor((x - xlim[0]) * nx / (xlim[1] - xlim[0])).astype(np.int64)
+    iy = np.floor((y - ylim[0]) * ny / (ylim[1] - ylim[0])).astype(np.int64)
+    keep = (ix >= 0) & (ix < nx) & (iy >= 0) & (iy < ny)
+    flat = iy[keep] * nx + ix[keep]
+    count = np.bincount(flat, minlength=nx * ny).reshape(ny, nx).astype(np.float32)
+    rgb = np.zeros((ny, nx, 3), dtype=np.float32)
+    for channel in range(3):
+        rgb[..., channel] = np.bincount(
+            flat, weights=palette[labels[keep], channel], minlength=nx * ny
+        ).reshape(ny, nx)
+    mass = gaussian_filter(count, 0.5)
+    for channel in range(3):
+        rgb[..., channel] = gaussian_filter(rgb[..., channel], 0.5) / np.maximum(mass, 1e-6)
+    intensity = np.clip(1.35 * (1 - np.exp(-mass / 1.4)), 0, 1)
+    return np.asarray([0.05, 0.05, 0.05], dtype=np.float32) * (1 - intensity[..., None]) + rgb * intensity[..., None]
+
+
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--session", type=Path, required=True)
-    parser.add_argument("--fit", type=Path, required=True)
+    parser.add_argument("--session", type=Path)
+    parser.add_argument("--fit", type=Path)
+    parser.add_argument("--run", type=Path)
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--sampling-frequency", type=float, default=30_000.0)
     parser.add_argument("--max-points", type=int, default=0)
@@ -27,6 +48,11 @@ def main():
     parser.add_argument("--seed", type=int, default=23)
     parser.add_argument("--overwrite", action="store_true")
     args = parser.parse_args()
+
+    if args.run is None and (args.session is None or args.fit is None):
+        parser.error("provide --run or both --session and --fit")
+    if args.run is not None and (args.session is not None or args.fit is not None):
+        parser.error("--run cannot be combined with --session or --fit")
 
     if args.out.exists() and not args.overwrite:
         raise FileExistsError(f"refusing to overwrite {args.out}")
@@ -39,18 +65,24 @@ def main():
     if not 0 < args.alpha <= 1:
         raise ValueError("alpha must lie in (0, 1]")
 
-    spike_times = np.load(args.session / "spike_times.npy", mmap_mode="r")
-    centroids = np.load(args.session / "centroids.npy", mmap_mode="r")
-    with np.load(args.fit, allow_pickle=False) as fit:
-        sources = np.asarray(fit["sources"], dtype=np.float32)
-        temporal_idx = np.asarray(fit["temporal_idx"], dtype=np.int64)
-        omega = np.asarray(fit["omega"], dtype=np.float32)
+    if args.run is None:
+        spike_times = np.load(args.session / "spike_times.npy", mmap_mode="r")
+        centroids = np.load(args.session / "centroids.npy", mmap_mode="r")
+        with np.load(args.fit, allow_pickle=False) as fit:
+            sources = np.asarray(fit["sources"], dtype=np.float32)
+            temporal_idx = np.asarray(fit["temporal_idx"], dtype=np.int64)
+            omega = np.asarray(fit["omega"], dtype=np.float32)
+        depth = np.asarray(centroids[:, 1], dtype=np.float32) + sources[:, 1]
+    else:
+        metadata = json.loads((args.run / "config.json").read_text())
+        args.sampling_frequency = float(metadata["fs"])
+        spike_times = np.load(args.run / "spike_times.npy", mmap_mode="r")
+        sources = np.load(args.run / "global_sources.npy", mmap_mode="r")
+        temporal_idx = np.load(args.run / "temporal_idx.npy", mmap_mode="r")
+        omega = np.load(args.run / "omega.npy")
+        depth = np.asarray(sources[:, 1], dtype=np.float32)
 
     event_count = len(spike_times)
-    if centroids.shape != (event_count, 2):
-        raise ValueError(
-            f"expected centroids with shape {(event_count, 2)}, got {centroids.shape}"
-        )
     if sources.shape != (event_count, 3):
         raise ValueError(
             f"expected sources with shape {(event_count, 3)}, got {sources.shape}"
@@ -69,9 +101,6 @@ def main():
     time_minutes = np.asarray(spike_times, dtype=np.float64) / (
         60.0 * args.sampling_frequency
     )
-    depth = (
-        np.asarray(centroids[:, 1], dtype=np.float32) + sources[:, 1]
-    )
     finite = np.isfinite(time_minutes) & np.isfinite(depth)
     rows = np.flatnonzero(finite)
     if args.max_points and len(rows) > args.max_points:
@@ -88,18 +117,25 @@ def main():
     figure, axis = plt.subplots(
         figsize=(15, 7.5), constrained_layout=True, facecolor=BACKGROUND
     )
-    artist = axis.scatter(
-        time_minutes[rows],
-        depth[rows],
-        c=temporal_idx[rows],
-        cmap=colormap,
-        norm=normalization,
-        marker=".",
-        s=args.marker_size,
-        linewidths=0,
-        alpha=args.alpha,
-        rasterized=True,
-    )
+    if args.run is None:
+        artist = axis.scatter(
+            time_minutes[rows], depth[rows], c=temporal_idx[rows], cmap=colormap,
+            norm=normalization, marker=".", s=args.marker_size, linewidths=0,
+            alpha=args.alpha, rasterized=True,
+        )
+    else:
+        time_limit = max(float(time_minutes[finite].max()), 1e-9)
+        depth_low, depth_high = np.quantile(depth[finite], (0.002, 0.998))
+        rgb_image = categorical_raster(
+            time_minutes[rows], depth[rows], temporal_idx[rows], rgb,
+            (0.0, time_limit), (depth_low, depth_high), 1750,
+            max(256, int((depth_high - depth_low) / 3)),
+        )
+        axis.imshow(
+            rgb_image, origin="lower", extent=(0.0, time_limit, depth_low, depth_high),
+            aspect="auto", interpolation="nearest",
+        )
+        artist = plt.cm.ScalarMappable(norm=normalization, cmap=colormap)
     axis.set(
         xlabel="recording time (min)",
         ylabel="probe depth (µm)",

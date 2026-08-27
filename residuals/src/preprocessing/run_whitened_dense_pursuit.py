@@ -45,6 +45,7 @@ def main(argv=None):
     parser.add_argument("--n-scales", type=int, default=9)
     parser.add_argument("--max-channel-normalized-rmse", type=float, default=3.0)
     parser.add_argument("--learn-omega", action="store_true")
+    parser.add_argument("--identifiable-rho", action="store_true")
     parser.add_argument(
         "--learn-omega-chunks", type=int, default=1,
         help="number of selected-interval chunks used to refine the input omega before extraction",
@@ -89,6 +90,7 @@ def main(argv=None):
         whitening_seed=args.whitening_seed,
         max_channel_normalized_rmse=args.max_channel_normalized_rmse,
         use_0010_math=True,
+        identifiable_rho=args.identifiable_rho,
         # χ² is deliberately not an acceptance gate in this workflow.
         min_delta_chi2=0.0,
         device=args.device,

@@ -10,7 +10,7 @@ import matplotlib.pyplot as plt
 from matplotlib.ticker import PercentFormatter
 import numpy as np
 
-from plot_reconstructions import profile_parameters, reconstruct
+from plot_reconstructions import EPS, kernel_values, profile_parameters, reconstruct
 
 
 EPS = np.finfo(np.float32).tiny
@@ -35,12 +35,15 @@ def load_chunk(run, chunk_index):
         missing = required.difference(archive.files)
         if missing:
             raise KeyError(f"{path} is missing fields: {sorted(missing)}")
-        return {key: archive[key] for key in required}
+        result = {key: archive[key] for key in required}
+        if "channel_normalized_rmse" in archive.files:
+            result["channel_normalized_rmse"] = archive["channel_normalized_rmse"]
+        return result
 
 
-def choose_examples(chunk, n_passes):
+def choose_examples(chunk, pass_indices):
     chosen = []
-    for residual_pass in range(n_passes):
+    for residual_pass in pass_indices:
         rows = np.flatnonzero(chunk["residual_pass"] == residual_pass)
         if not len(rows):
             raise ValueError(f"chunk has no accepted fits in pass {residual_pass + 1}")
@@ -66,6 +69,46 @@ def geometry_waveforms(axis, coordinates, values, scale, color, linestyle="-"):
         )
 
 
+def reconstruct_saved_fit(run, config, coordinates, ids, mask, sources,
+                          profile_idx, omega, temporal_idx, alpha, rho=None):
+    parameters = profile_parameters(
+        config["kernel"], profile_idx, config["n_scales"]
+    )
+    if not config.get("use_0010_math", False):
+        return reconstruct(
+            coordinates, mask, sources, parameters, omega, temporal_idx, alpha,
+            config["kernel"],
+        )
+
+    whitening = np.load(run / "whitening_matrix.npy", mmap_mode="r")
+    dxy2 = (
+        (coordinates[..., 0] - sources[:, None, 0]) ** 2
+        + (coordinates[..., 1] - sources[:, None, 1]) ** 2
+    )
+    if config.get("identifiable_rho", False):
+        if rho is None:
+            raise ValueError("identifiable-rho fits require saved rho values")
+        raw = rho[:, None] / np.sqrt(dxy2 + rho[:, None] ** 2)
+    else:
+        raw = kernel_values(
+            config["kernel"], dxy2, sources[:, None, 2] ** 2,
+            parameters[:, None, :],
+        ).astype(np.float32)
+    footprint = np.zeros_like(raw)
+    for row, valid in enumerate(mask):
+        channels = ids[row, valid]
+        footprint[row, valid] = raw[row, valid] @ whitening[np.ix_(channels, channels)]
+    footprint /= np.maximum(np.linalg.norm(footprint, axis=1, keepdims=True), EPS)
+    normalized_omega = omega / np.maximum(
+        np.linalg.norm(omega, axis=1, keepdims=True), EPS
+    )
+    prediction = (
+        alpha[:, None, None] * footprint[:, :, None]
+        * normalized_omega[temporal_idx, None, :]
+    )
+    return footprint, prediction
+
+
 def spatial_width_image(source, rho, extent=165.0, n=241):
     grid = np.linspace(-extent, extent, n)
     xx, yy = np.meshgrid(grid, grid, indexing="xy")
@@ -74,41 +117,43 @@ def spatial_width_image(source, rho, extent=165.0, n=241):
     return grid, image
 
 
-def plot_examples(run, chunk, metadata, output, chunk_index):
+def plot_examples(run, chunk, metadata, output, chunk_index, max_examples):
     config = metadata["config"]
     omega = np.load(run / "omega.npy")
     n_passes = int(np.max(chunk["residual_pass"])) + 1
-    indices = choose_examples(chunk, n_passes)
+    displayed_passes = np.unique(
+        np.rint(np.linspace(0, n_passes - 1, min(max_examples, n_passes))).astype(int)
+    )
+    indices = choose_examples(chunk, displayed_passes)
     mask = chunk["neighbor_ids"][indices] >= 0
     measured = chunk["residual_waveforms"][indices] * mask[:, :, None]
     coordinates = chunk["local_coords"][indices]
     sources = chunk["sources"][indices]
+    rho_saved = chunk.get("rho")
     temporal_idx = chunk["temporal_idx"][indices]
     alpha = chunk["alpha"][indices]
     parameters = profile_parameters(
         config["kernel"], chunk["profile_idx"][indices], config["n_scales"]
     )
-    footprint, predicted = reconstruct(
-        coordinates,
-        mask,
-        sources,
-        parameters,
-        omega,
-        temporal_idx,
-        alpha,
-        config["kernel"],
+    footprint, predicted = reconstruct_saved_fit(
+        run, config, coordinates, chunk["neighbor_ids"][indices], mask, sources,
+        chunk["profile_idx"][indices], omega, temporal_idx, alpha,
+        None if rho_saved is None else rho_saved[indices],
     )
     after = measured - predicted
-    rho = np.sqrt(sources[:, 2] ** 2 + parameters[:, 0] ** 2)
+    rho = (
+        rho_saved[indices] if rho_saved is not None
+        else np.sqrt(sources[:, 2] ** 2 + parameters[:, 0] ** 2)
+    )
     fs = float(metadata["fs"])
 
     figure, axes = plt.subplots(
-        4,
-        n_passes,
-        figsize=(4.0 * n_passes, 13.0),
+        5,
+        len(indices),
+        figsize=(4.0 * len(indices), 15.0),
         constrained_layout=True,
         squeeze=False,
-        gridspec_kw={"height_ratios": (1.05, 1.05, 0.7, 1.0)},
+        gridspec_kw={"height_ratios": (1.05, 1.05, 0.7, 1.0, 0.75)},
     )
     for column, index in enumerate(indices):
         valid = mask[column]
@@ -125,7 +170,7 @@ def plot_examples(run, chunk, metadata, output, chunk_index):
         )
         axis.scatter(coords[:, 0], coords[:, 1], s=7, marker="s", color="0.55")
         axis.set_title(
-            f"pass {column + 1} · median-quality fit\n"
+            f"pass {int(chunk['residual_pass'][index]) + 1} · median-quality fit\n"
             f"captured {100 * capture:.1f}% · relative residual {100 * (1-capture):.1f}%",
             fontsize=9,
         )
@@ -203,13 +248,26 @@ def plot_examples(run, chunk, metadata, output, chunk_index):
         if column == 0:
             axis.set_ylabel("local depth y (µm)")
 
+        axis = axes[4, column]
+        if "channel_normalized_rmse" in chunk:
+            channel_error = chunk["channel_normalized_rmse"][index, valid]
+            ylabel = "normalized RMSE"
+            axis.axhline(3.0, color="#e03131", linestyle="--", linewidth=0.8)
+        else:
+            channel_error = np.sqrt(np.mean(after[column, valid] ** 2, axis=1))
+            channel_error /= np.sqrt(np.mean(measured[column, valid] ** 2, axis=1)).clip(EPS)
+            ylabel = "relative channel RMSE"
+        axis.bar(np.arange(valid.sum()), channel_error, color="#845ef7", width=0.72)
+        axis.set(title="reconstruction error by channel", xlabel="local channel", ylabel=ylabel)
+        axis.grid(alpha=0.2, axis="y")
+
         for axis in axes[:, column]:
             axis.tick_params(labelsize=7)
             axis.grid(alpha=0.12)
 
     figure.suptitle(
-        f"Continuous residual-smoke reconstruction examples · chunk {chunk_index} · "
-        "one representative accepted fit per pass",
+        f"Residual-pursuit reconstruction examples · chunk {chunk_index} · "
+        "representative fits across pursuit passes",
         fontsize=14,
     )
     figure.savefig(output / "reconstruction_examples.png", dpi=800)
@@ -224,7 +282,7 @@ def plot_diagnostics(run, metadata, output):
     omega = np.load(run / "omega.npy")
     n_passes = int(np.max(residual_pass)) + 1
     pass_numbers = np.arange(1, n_passes + 1)
-    colors = PASS_COLORS[:n_passes]
+    colors = plt.colormaps["viridis"](np.linspace(0.12, 0.88, n_passes))
 
     figure, axes = plt.subplots(1, 4, figsize=(18, 4.4), constrained_layout=True)
     samples = [captured_fraction[residual_pass == index] for index in range(n_passes)]
@@ -337,6 +395,7 @@ def main():
     parser.add_argument("--run", type=Path, required=True)
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--chunk-index", type=int, default=0)
+    parser.add_argument("--max-examples", type=int, default=4)
     args = parser.parse_args()
 
     metadata = json.loads((args.run / "config.json").read_text())
@@ -344,7 +403,7 @@ def main():
         raise ValueError("residual reconstruction plots currently require monopole fits")
     chunk = load_chunk(args.run, args.chunk_index)
     args.out.mkdir(parents=True, exist_ok=True)
-    plot_examples(args.run, chunk, metadata, args.out, args.chunk_index)
+    plot_examples(args.run, chunk, metadata, args.out, args.chunk_index, args.max_examples)
     medians = plot_diagnostics(args.run, metadata, args.out)
     print(
         "median captured fraction by pass: "
