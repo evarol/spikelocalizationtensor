@@ -18,7 +18,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from maths import (
     build_codebook_detection_footprints,
+    build_profiles,
     localize_spikes_fixed_codebook,
+    reconstruct_spike_fits,
 )
 
 
@@ -62,6 +64,13 @@ class ResidualConfig:
     save_waveforms: bool = False
     profile_stages: bool = False
     min_delta_chi2: float = 0.0
+    whitening: str = "none"
+    whitening_range_um: float = 48.0
+    whitening_regularization: float = 1e-3
+    whitening_max_samples: int = 300000
+    whitening_seed: int = 42
+    max_channel_normalized_rmse: float = float("inf")
+    use_0010_math: bool = False
 
 
 def channel_neighborhoods(channel_positions, radius_um):
@@ -104,6 +113,173 @@ def robust_channel_noise(data):
     positive = noise[np.isfinite(noise) & (noise > 0)]
     floor = np.median(positive) * 1e-3 if len(positive) else 1.0
     return np.maximum(noise, floor).astype(np.float32)
+
+
+def estimate_whitening(data, positions, mode="none", radius_um=48.0,
+                      regularization=1e-3, max_samples=300000, seed=42):
+    """Return a channel transform W such that normalized_data = data @ W.
+
+    For local-zca each output channel uses the ZCA column estimated from its
+    geometric neighborhood, matching the local-column construction in IBL.
+    """
+    data = np.asarray(data, dtype=np.float32)
+    positions = np.asarray(positions, dtype=np.float32)
+    if mode not in ("none", "diagonal", "local-zca", "zca"):
+        raise ValueError(f"unknown whitening mode {mode!r}")
+    if data.ndim != 2 or data.shape[1] != len(positions):
+        raise ValueError("whitening data and channel geometry are inconsistent")
+    if regularization < 0:
+        raise ValueError("whitening regularization must be nonnegative")
+    n_samples, n_channels = data.shape
+    if max_samples > 0 and n_samples > max_samples:
+        rng = np.random.default_rng(seed)
+        sample = data[np.sort(rng.choice(n_samples, max_samples, replace=False))]
+    else:
+        sample = data
+    sample = sample - np.median(sample, axis=0, keepdims=True)
+    noise = robust_channel_noise(sample)
+    if mode == "none":
+        return np.eye(n_channels, dtype=np.float32), noise
+    if mode == "diagonal":
+        return np.diag(1.0 / noise).astype(np.float32), noise
+
+    def zca(values):
+        covariance = values.T @ values / max(len(values), 1)
+        scale = max(float(np.trace(covariance) / len(covariance)), np.finfo(np.float32).tiny)
+        eigenvalues, eigenvectors = np.linalg.eigh(covariance)
+        inverse_root = 1.0 / np.sqrt(np.maximum(eigenvalues, regularization * scale))
+        return ((eigenvectors * inverse_root) @ eigenvectors.T).astype(np.float32)
+
+    if mode == "zca":
+        return zca(sample), noise
+    distances = np.linalg.norm(positions[:, None] - positions[None], axis=2)
+    transform = np.zeros((n_channels, n_channels), dtype=np.float32)
+    for channel in range(n_channels):
+        ids = np.flatnonzero(distances[channel] <= radius_um)
+        local = zca(sample[:, ids])
+        transform[ids, channel] = local[:, np.flatnonzero(ids == channel)[0]]
+    return transform, noise
+
+
+def transform_local_footprints(prediction, ids, mask, whitening):
+    """Map raw local spatial predictions to the selected whitened coordinates."""
+    transformed = np.zeros_like(prediction, dtype=np.float32)
+    for row, (row_ids, row_mask) in enumerate(zip(ids, mask)):
+        selected = row_ids[row_mask]
+        local_transform = whitening[np.ix_(selected, selected)]
+        transformed[row, row_mask] = local_transform.T @ prediction[row, row_mask]
+    return transformed
+
+
+def transform_detection_footprints(footprints, neighborhood_ids, whitening):
+    """Transform each anchor's spatial-bank footprint into whitened channels."""
+    transformed = np.zeros_like(footprints, dtype=np.float32)
+    for anchor, row_ids in enumerate(neighborhood_ids):
+        valid = row_ids >= 0
+        selected = row_ids[valid]
+        local_transform = whitening[np.ix_(selected, selected)]
+        transformed[anchor][:, valid] = footprints[anchor][:, valid] @ local_transform
+    return transformed
+
+
+def refit_spatial_scales(local_coords, waveforms, mask, fit, omega, kernels,
+                         n_scales, device, ids=None, whitening=None):
+    """Choose the spatial scale after source fitting using full-window SSE."""
+    profiles = build_profiles(kernels, n_scales)
+    n_events = len(waveforms)
+    errors = np.full((len(profiles), n_events), np.inf, dtype=np.float32)
+    predictions = []
+    alphas = []
+    for profile_index in range(len(profiles)):
+        candidate = reconstruct_spike_fits(
+            local_coords, mask, fit["sources"],
+            np.full(n_events, profile_index, dtype=np.int64), omega,
+            fit["temporal_idx"], np.ones(n_events, dtype=np.float32),
+            kernels=kernels, n_scales=n_scales, device=device,
+        )
+        if whitening is not None:
+            if ids is None:
+                raise ValueError("ids are required when refitting in whitened coordinates")
+            candidate = transform_local_footprints(candidate, ids, mask, whitening)
+        denom = np.square(candidate).sum((1, 2)).clip(np.finfo(np.float32).tiny)
+        alpha = (waveforms * candidate).sum((1, 2)) / denom
+        residual = waveforms - alpha[:, None, None] * candidate
+        errors[profile_index] = np.square(residual).sum((1, 2))
+        predictions.append(candidate)
+        alphas.append(alpha.astype(np.float32))
+    selected = errors.argmin(axis=0)
+    prediction = np.empty_like(waveforms, dtype=np.float32)
+    alpha = np.empty(n_events, dtype=np.float32)
+    for profile_index in range(len(profiles)):
+        rows = selected == profile_index
+        if np.any(rows):
+            prediction[rows] = predictions[profile_index][rows] * alphas[profile_index][rows, None, None]
+            alpha[rows] = alphas[profile_index][rows]
+    sigma = np.asarray([profiles[index][1][0] for index in selected], dtype=np.float32)
+    return selected.astype(np.int16), sigma, alpha, prediction
+
+
+def apply_full_window_refit(fit, local_coords, waveforms, ids, mask, omega,
+                            config, whitening=None):
+    profile_idx, sigma, alpha, prediction = refit_spatial_scales(
+        local_coords, waveforms, mask, fit, omega,
+        tuple(part.strip() for part in config.kernel.split(",")), config.n_scales,
+        config.device, ids=ids, whitening=whitening,
+    )
+    fit = dict(fit)
+    fit["profile_idx"] = profile_idx
+    fit["sigma"] = sigma
+    fit["alpha"] = alpha
+    fit["prediction"] = prediction
+    fit["captured_energy"] = np.square(prediction).sum((1, 2)).astype(np.float32)
+    fit["residual_energy"] = np.square(waveforms - prediction).sum((1, 2)).astype(np.float32)
+    return fit
+
+
+def coherent_rmse(waveforms, prediction, ids, mask, noise):
+    scale = noise[np.maximum(ids, 0)]
+    values = np.sqrt(np.mean(np.square(waveforms - prediction), axis=2)) / scale
+    return np.where(mask, values, 0.0).astype(np.float32)
+
+
+def local_whitening_transforms(ids, mask, whitening_matrix):
+    transforms = np.zeros((len(ids), ids.shape[1], ids.shape[1]), dtype=np.float32)
+    for row, (row_ids, row_mask) in enumerate(zip(ids, mask)):
+        selected = row_ids[row_mask]
+        transforms[row][np.ix_(row_mask, row_mask)] = whitening_matrix[
+            np.ix_(selected, selected)
+        ]
+    return transforms
+
+
+def localize_configured(local_coords, waveforms, ids, mask, omega, config,
+                        coarse_footprint_cache, whitening_matrix=None):
+    if config.use_0010_math:
+        from maths_0010 import localize_spikes_fixed_codebook as localize_0010
+        return localize_0010(
+            local_coords, waveforms, omega,
+            kernels=tuple(part.strip() for part in config.kernel.split(",")),
+            n_scales=config.n_scales, n_sites=config.n_sites,
+            refine_levels=config.refine_levels, device=config.device, mask=mask,
+            continuous=config.continuous_refine,
+            continuous_max_iterations=config.continuous_max_iterations,
+            continuous_backtracks=config.continuous_backtracks,
+            spatial_transform=local_whitening_transforms(
+                ids, mask, whitening_matrix
+            ),
+        )
+    return localize_spikes_fixed_codebook(
+        local_coords, waveforms, omega,
+        kernels=tuple(part.strip() for part in config.kernel.split(",")),
+        n_scales=config.n_scales, n_sites=config.n_sites,
+        refine_levels=config.refine_levels,
+        continuous=config.continuous_refine,
+        continuous_max_iterations=config.continuous_max_iterations,
+        continuous_backtracks=config.continuous_backtracks,
+        device=config.device, mask=mask,
+        coarse_footprint_cache=coarse_footprint_cache,
+        config_batch_size=config.localization_config_batch_size,
+    )
 
 
 def detect_residual_peaks(
@@ -288,6 +464,7 @@ def select_conflict_free_peaks(
     scores,
     lockout_samples,
     max_peaks=None,
+    spatial_neighbors=None,
 ):
     times = np.asarray(times, dtype=np.int64)
     channels = np.asarray(channels, dtype=np.int32)
@@ -299,13 +476,18 @@ def select_conflict_free_peaks(
         raise ValueError("pursuit lockout must be nonnegative")
     if not len(times):
         return times, channels, scores
-    blocked = np.zeros(int(times.max()) + lockout_samples + 1, dtype=bool)
     selected = []
     for index, time in enumerate(times):
-        if blocked[time]:
+        conflict = False
+        for chosen in selected:
+            if abs(time - times[chosen]) > lockout_samples:
+                continue
+            if spatial_neighbors is None or channels[index] in spatial_neighbors[channels[chosen]]:
+                conflict = True
+                break
+        if conflict:
             continue
         selected.append(index)
-        blocked[max(0, time - lockout_samples):time + lockout_samples + 1] = True
         if max_peaks is not None and len(selected) >= max_peaks:
             break
     selected = np.asarray(selected, dtype=np.int64)
@@ -539,6 +721,7 @@ def _empty_result(width, waveform_length, save_waveforms):
         "neighbor_counts": np.empty(0, dtype=np.int16),
         "local_coords": np.empty((0, width, 2), dtype=np.float32),
         "profile_idx": np.empty(0, dtype=np.int16),
+        "sigma": np.empty(0, dtype=np.float32),
         "temporal_idx": np.empty(0, dtype=np.int16),
         "alpha": np.empty(0, dtype=np.float32),
         "detection_score": np.empty(0, dtype=np.float32),
@@ -546,6 +729,7 @@ def _empty_result(width, waveform_length, save_waveforms):
         "captured_energy": np.empty(0, dtype=np.float32),
         "captured_fraction": np.empty(0, dtype=np.float32),
         "delta_chi2": np.empty(0, dtype=np.float32),
+        "channel_normalized_rmse": np.empty((0, width), dtype=np.float32),
         "continuous_displacement_um": np.empty(0, dtype=np.float32),
         "continuous_energy_gain": np.empty(0, dtype=np.float32),
         "pass_energy_drop_fraction": np.empty(0, dtype=np.float32),
@@ -583,6 +767,7 @@ def _peel_preprocessed_chunk_legacy(
     fs,
     config,
     coarse_footprint_cache=None,
+    whitening_matrix=None,
 ):
     n_before = int(round(config.ms_before * fs / 1000))
     n_after = int(round(config.ms_after * fs / 1000))
@@ -687,23 +872,18 @@ def _peel_preprocessed_chunk_legacy(
             profile_stop(timings, "waveform_extraction", started)
             started = profile_start()
             with torch.profiler.record_function("residual/localization"):
-                fit = localize_spikes_fixed_codebook(
-                    local_coords,
-                    waveforms,
-                    omega,
-                    kernels=kernels,
-                    n_scales=config.n_scales,
-                    n_sites=config.n_sites,
-                    refine_levels=config.refine_levels,
-                    continuous=config.continuous_refine,
-                    continuous_max_iterations=config.continuous_max_iterations,
-                    continuous_backtracks=config.continuous_backtracks,
-                    device=config.device,
-                    mask=mask,
-                    coarse_footprint_cache=coarse_footprint_cache,
-                    config_batch_size=config.localization_config_batch_size,
+                fit = localize_configured(
+                    local_coords, waveforms, ids, mask, omega, config,
+                    coarse_footprint_cache, whitening_matrix,
                 )
             profile_stop(timings, "localization", started)
+            if np.isfinite(config.max_channel_normalized_rmse) and not config.use_0010_math:
+                fit = apply_full_window_refit(
+                    fit, local_coords, waveforms, ids, mask, omega, config
+                )
+            channel_rmse = coherent_rmse(
+                waveforms, fit["prediction"], ids, mask, noise
+            )
             captured_fraction = fit["captured_energy"] / np.maximum(
                 fit["input_energy"], np.finfo(np.float32).tiny
             )
@@ -712,6 +892,11 @@ def _peel_preprocessed_chunk_legacy(
                 & np.isfinite(fit["alpha"])
                 & (fit["captured_energy"] > 0)
                 & (captured_fraction >= config.min_captured_fraction)
+                & np.all(
+                    (~mask)
+                    | (channel_rmse <= config.max_channel_normalized_rmse),
+                    axis=1,
+                )
             )
             if not np.any(accepted):
                 continue
@@ -727,7 +912,7 @@ def _peel_preprocessed_chunk_legacy(
                     n_before,
                     n_after,
                     min_captured_fraction=config.min_captured_fraction,
-                    min_delta_chi2=config.min_delta_chi2,
+                    min_delta_chi2=0.0,
                     noise=noise,
                 )
             profile_stop(timings, "subtraction", started)
@@ -776,6 +961,7 @@ def _peel_preprocessed_chunk_legacy(
                 "neighbor_counts": neighbor_counts[anchor].astype(np.int16),
                 "local_coords": local_coords[in_core].astype(np.float32),
                 "profile_idx": fit["profile_idx"][in_core].astype(np.int16),
+                "sigma": fit["sigma"][in_core].astype(np.float32),
                 "temporal_idx": fit["temporal_idx"][in_core].astype(np.int16),
                 "alpha": fitted_alpha[in_core].astype(np.float32),
                 "detection_score": detection_score[start:stop][in_core].astype(
@@ -785,6 +971,7 @@ def _peel_preprocessed_chunk_legacy(
                 "captured_energy": fitted_captured_energy[in_core],
                 "captured_fraction": fitted_captured_fraction[in_core],
                 "delta_chi2": fitted_delta_chi2[in_core],
+                "channel_normalized_rmse": channel_rmse[in_core],
                 "continuous_displacement_um": fit[
                     "continuous_displacement_um"
                 ][in_core].astype(np.float32),
@@ -863,6 +1050,7 @@ def _peel_preprocessed_chunk_pursuit(
     fs,
     config,
     coarse_footprint_cache=None,
+    whitening_matrix=None,
 ):
     if not 1 <= config.pursuit_rounds <= np.iinfo(np.int8).max:
         raise ValueError("pursuit rounds must lie in [1, 127]")
@@ -942,6 +1130,7 @@ def _peel_preprocessed_chunk_pursuit(
                 detection_score,
                 lockout_samples,
                 max_peaks=config.max_peaks_per_round,
+                spatial_neighbors=spatial_neighbors,
             )
         profile_stop(timings, "peak_selection", started)
         if not len(times):
@@ -970,23 +1159,18 @@ def _peel_preprocessed_chunk_pursuit(
             profile_stop(timings, "waveform_extraction", started)
             started = profile_start()
             with torch.profiler.record_function("pursuit/localization"):
-                fit = localize_spikes_fixed_codebook(
-                    local_coords,
-                    waveforms,
-                    omega,
-                    kernels=kernels,
-                    n_scales=config.n_scales,
-                    n_sites=config.n_sites,
-                    refine_levels=config.refine_levels,
-                    continuous=config.continuous_refine,
-                    continuous_max_iterations=config.continuous_max_iterations,
-                    continuous_backtracks=config.continuous_backtracks,
-                    device=config.device,
-                    mask=mask,
-                    coarse_footprint_cache=coarse_footprint_cache,
-                    config_batch_size=config.localization_config_batch_size,
+                fit = localize_configured(
+                    local_coords, waveforms, ids, mask, omega, config,
+                    coarse_footprint_cache, whitening_matrix,
                 )
             profile_stop(timings, "localization", started)
+            if np.isfinite(config.max_channel_normalized_rmse) and not config.use_0010_math:
+                fit = apply_full_window_refit(
+                    fit, local_coords, waveforms, ids, mask, omega, config
+                )
+            channel_rmse = coherent_rmse(
+                waveforms, fit["prediction"], ids, mask, noise
+            )
             captured_fraction = fit["captured_energy"] / np.maximum(
                 fit["input_energy"], np.finfo(np.float32).tiny
             )
@@ -995,6 +1179,11 @@ def _peel_preprocessed_chunk_pursuit(
                 & np.isfinite(fit["alpha"])
                 & (fit["captured_energy"] > 0)
                 & (captured_fraction >= config.min_captured_fraction)
+                & np.all(
+                    (~mask)
+                    | (channel_rmse <= config.max_channel_normalized_rmse),
+                    axis=1,
+                )
             )
             if not np.any(accepted):
                 continue
@@ -1010,7 +1199,7 @@ def _peel_preprocessed_chunk_pursuit(
                     n_before,
                     n_after,
                     min_captured_fraction=config.min_captured_fraction,
-                    min_delta_chi2=config.min_delta_chi2,
+                    min_delta_chi2=0.0,
                     noise=noise,
                 )
             profile_stop(timings, "subtraction", started)
@@ -1077,6 +1266,7 @@ def _peel_preprocessed_chunk_pursuit(
                 "neighbor_counts": neighbor_counts[anchor].astype(np.int16),
                 "local_coords": local_coords[in_core].astype(np.float32),
                 "profile_idx": fit["profile_idx"][in_core].astype(np.int16),
+                "sigma": fit["sigma"][in_core].astype(np.float32),
                 "temporal_idx": fit["temporal_idx"][in_core].astype(np.int16),
                 "alpha": fitted_alpha[in_core].astype(np.float32),
                 "detection_score": detection_score[start:stop][in_core].astype(
@@ -1086,6 +1276,7 @@ def _peel_preprocessed_chunk_pursuit(
                 "captured_energy": fitted_captured_energy[in_core],
                 "captured_fraction": fitted_captured_fraction[in_core],
                 "delta_chi2": fitted_delta_chi2[in_core],
+                "channel_normalized_rmse": channel_rmse[in_core],
                 "continuous_displacement_um": fit[
                     "continuous_displacement_um"
                 ][in_core].astype(np.float32),
@@ -1169,6 +1360,7 @@ def peel_preprocessed_chunk(
     fs,
     config,
     coarse_footprint_cache=None,
+    whitening_matrix=None,
 ):
     arguments = (
         data,
@@ -1188,11 +1380,13 @@ def peel_preprocessed_chunk(
     )
     if config.pursuit_rounds > 0:
         result, _ = _peel_preprocessed_chunk_pursuit(
-            *arguments, coarse_footprint_cache=coarse_footprint_cache
+            *arguments, coarse_footprint_cache=coarse_footprint_cache,
+            whitening_matrix=whitening_matrix,
         )
         return result
     return _peel_preprocessed_chunk_legacy(
-        *arguments, coarse_footprint_cache=coarse_footprint_cache
+        *arguments, coarse_footprint_cache=coarse_footprint_cache,
+        whitening_matrix=whitening_matrix,
     )
 
 
@@ -1355,6 +1549,26 @@ def run_recording(
                 requested_stop,
                 first_sample + int(round(duration_seconds * fs)),
             )
+        if requested_stop <= first_sample:
+            raise ValueError("the requested recording interval is empty")
+        # The exact selected interval is the normalization reference, not a
+        # collection of independently normalized chunks.
+        whitening_raw = reader[first_sample:requested_stop, :n_channels]
+        whitening_data = preprocess_voltage(
+            whitening_raw, fs, freq_min=config.freq_min,
+            freq_max=config.freq_max, order=config.filter_order,
+        )
+        whitening_matrix, whitening_noise = estimate_whitening(
+            whitening_data, channel_positions, mode=config.whitening,
+            radius_um=config.whitening_range_um,
+            regularization=config.whitening_regularization,
+            max_samples=config.whitening_max_samples,
+            seed=config.whitening_seed,
+        )
+        whitening_inverse = np.linalg.pinv(whitening_matrix).astype(np.float32)
+        detection_footprints = transform_detection_footprints(
+            detection_footprints, neighborhood_ids, whitening_matrix
+        )
         chunk_samples = max(1, int(round(config.chunk_seconds * fs)))
         margin = max(
             int(round(config.read_margin_ms * fs / 1000)),
@@ -1370,12 +1584,16 @@ def run_recording(
             "first_sample": first_sample,
             "stop_sample": requested_stop,
             "config": asdict(config),
+            "whitening_coordinate": "normalized" if config.whitening != "none" else "preprocessed_voltage",
         }
         (output_path / "config.json").write_text(
             json.dumps(metadata, indent=2) + "\n"
         )
         np.save(output_path / "channel_positions.npy", channel_positions)
         np.save(output_path / "detection_footprints.npy", detection_footprints)
+        np.save(output_path / "whitening_matrix.npy", whitening_matrix)
+        np.save(output_path / "whitening_inverse.npy", whitening_inverse)
+        np.save(output_path / "whitening_noise.npy", whitening_noise)
 
         starts = list(range(first_sample, requested_stop, chunk_samples))
         if not starts:
@@ -1395,6 +1613,7 @@ def run_recording(
                     freq_max=config.freq_max,
                     order=config.filter_order,
                 )
+                data = (data @ whitening_matrix).astype(np.float32, copy=False)
             return data, read_start, core_global_stop
 
         coarse_footprint_cache = {}
@@ -1437,6 +1656,7 @@ def run_recording(
                         fs,
                         config,
                         coarse_footprint_cache=coarse_footprint_cache,
+                        whitening_matrix=whitening_matrix,
                     )
                     numerator, weight, count = statistics
                     previous = omega
@@ -1515,6 +1735,7 @@ def run_recording(
                         fs,
                         config,
                         coarse_footprint_cache=coarse_footprint_cache,
+                        whitening_matrix=whitening_matrix,
                     )
                 with torch.profiler.record_function("chunk/write_checkpoint"):
                     _write_chunk(chunk_path, result)
@@ -1583,7 +1804,15 @@ def main():
     parser.add_argument(
         "--pursuit-min-round-energy-drop-fraction", type=float, default=0.0
     )
-    parser.add_argument("--min-delta-chi2", type=float, default=0.0)
+    parser.add_argument(
+        "--whitening", choices=("none", "diagonal", "local-zca", "zca"),
+        default="none",
+    )
+    parser.add_argument("--whitening-range-um", type=float, default=48.0)
+    parser.add_argument("--whitening-regularization", type=float, default=1e-3)
+    parser.add_argument("--whitening-max-samples", type=int, default=300000)
+    parser.add_argument("--whitening-seed", type=int, default=42)
+    parser.add_argument("--max-channel-normalized-rmse", type=float, default=float("inf"))
     parser.add_argument("--codebook-learning-chunks", type=int, default=0)
     parser.add_argument("--codebook-momentum", type=float, default=0.9)
     parser.add_argument("--codebook-min-events-per-row", type=int, default=32)
@@ -1628,7 +1857,13 @@ def main():
         pursuit_min_round_energy_drop_fraction=(
             args.pursuit_min_round_energy_drop_fraction
         ),
-        min_delta_chi2=args.min_delta_chi2,
+        min_delta_chi2=0.0,
+        whitening=args.whitening,
+        whitening_range_um=args.whitening_range_um,
+        whitening_regularization=args.whitening_regularization,
+        whitening_max_samples=args.whitening_max_samples,
+        whitening_seed=args.whitening_seed,
+        max_channel_normalized_rmse=args.max_channel_normalized_rmse,
         codebook_learning_chunks=args.codebook_learning_chunks,
         codebook_momentum=args.codebook_momentum,
         codebook_min_events_per_row=args.codebook_min_events_per_row,
