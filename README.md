@@ -13,6 +13,13 @@ place, a shape, a lag and a loudness:
 
 ![method](docs/panels/schematic.png)
 
+One spike carried end to end through the model (`prior2_shift_M64_R4`, R=4): the
+measurement on its ten contacts; the superposition of the four selected spatial kernels
+as a field, with the contacts as squares and the source centres as rings; the codebook
+atom each source chose, bold against the cone of the codebook it came from; those atoms
+after their learned lags `τ_r`; and the reconstruction in green over the measurement in
+red. Regenerate it with `python3 docs/make_schematic.py --runs zncc/runs/onehot_prior`.
+
 The spatial atoms are analytic kernels with **learned** centres and scales; the shape
 codebook `{ψ_q}` is shared by every spike in the recording. Nothing here is an encoder
 network: assignment is matching pursuit with exact coefficient refits, and the codebook
