@@ -12,7 +12,7 @@ Each spike contributes a point at (anchor + mu_k) weighted by ||v||, since the m
 readout is a single lattice site, not a heat map. z comes from the site's depth, so I_t
 is a genuine 3-D image and the existing pipeline applies unchanged.
 
-Outputs, all under figures/<tag>/:
+Outputs, all under zncc/figures/tensor/<tag>/:
     dc.png      D and C, soft and hard, with the post-hoc motion solved from each
     dc.npz      the raw matrices
     It_zoom.mp4 / It_full.mp4   the images the ZNCC actually sees, 1 s per frame
@@ -37,11 +37,11 @@ REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO))
 
 from spiketensor import data as D                                    # noqa: E402
+from spiketensor.drift import SUFFIX, correction                   # noqa: E402
 from spiketensor.dredge import DredgeConfig, solve_rigid             # noqa: E402
 from spiketensor.volume import GridSpec, VolumeSmoother              # noqa: E402
 from spiketensor.zncc import ShiftMaxZNCC, ZNCCConfig                # noqa: E402
 from spiketensor.gtscore import score                          # noqa: E402
-from spiketensor.baselines import reference_positions              # noqa: E402
 
 
 def load_any(runs, tag):
@@ -51,12 +51,17 @@ def load_any(runs, tag):
     codebook_*.pt is a plain dict, not a module state dict, so viz_hard.load cannot read
     them."""
     ck = torch.load(runs / f"codebook_{tag}.pt", map_location="cpu", weights_only=False)
-    z = np.load(runs / f"pi_{tag}.npz")
-    ck.setdefault("dataset", "np1")
-    # the candidate index is site*S + profile, so the position is a floor-divide away and
-    # the 2.6M-row expanded table never has to be materialized
-    return (z["mu_site"].astype(np.float32),
-            z["k"].astype(np.int64) // int(z["S"]), z["v"], ck)
+    if ck.get("model") == "lattice":
+        z = np.load(runs / f"pi_{tag}.npz")
+        ck.setdefault("dataset", "np1")
+        if "pos" in z.files:
+            ck["pos_xyz"] = z["pos"].astype(np.float32)
+        if "mu_site" in z.files:
+            return (z["mu_site"].astype(np.float32),
+                    z["k"].astype(np.int64) // int(z["S"]), z["v"], ck)
+        return z["mu"].astype(np.float32), z["k"].astype(np.int64), z["v"], ck
+    raise NotImplementedError('hard-codebook models are not part of this package')
+    return cb.mu.numpy(), K, V, ck
 
 DEV = "mps" if torch.backends.mps.is_available() else "cpu"
 
@@ -138,13 +143,16 @@ def main():
     ap.add_argument("--monopole", action="store_true",
                     help="use the raw monopole localizations instead of a fitted model, "
                          "through this identical pipeline, as a matched baseline")
-    ap.add_argument("--runs", type=Path, default=REPO / "runs")
-    ap.add_argument("--out", type=Path, default=REPO / "figures")
+    ap.add_argument("--runs", type=Path, default=REPO / "zncc/runs/tensor")
+    ap.add_argument("--out", type=Path, default=REPO / "zncc/figures/tensor")
     ap.add_argument("--tau", type=float, default=0.2, help="softmax temperature over lags")
     ap.add_argument("--stride", type=int, default=2, help="bins for the D/C matrices")
     ap.add_argument("--smooth_um", type=float, default=4.0)
     ap.add_argument("--margin", type=int, default=10)
     ap.add_argument("--movie", action="store_true")
+    ap.add_argument("--correct", choices=["none", "soft", "hard", "real-rigid", "real-nonrigid"], default="none",
+                    help="subtract this fit's own DREDge motion from the depths before "
+                         "building I_t; outputs get a _dsoft / _dhard suffix")
     ap.add_argument("--movie_only", action="store_true",
                     help="skip the D/C recomputation and just render the movies")
     ap.add_argument("--fps", type=int, default=25)
@@ -160,7 +168,7 @@ def main():
         mu, KS, V, ck = load_any(a.runs, a.tag)
         rec = D.load(ck["dataset"])
     # the SAME grid the ZNCC project uses, so every number lands on a known scale
-    g = GridSpec(**torch.load(REPO / "runs/gridspec.pt",
+    g = GridSpec(**torch.load(REPO / "zncc/runs/pretrain_np1/model.pt",
                               map_location="cpu", weights_only=False)["grid"])
     sm = VolumeSmoother(a.smooth_um, g, device=DEV).to(DEV)
 
@@ -169,13 +177,29 @@ def main():
         # weight by ||v||, their internal amplitude; both are "how loud is this spike"
         # in their own units and the two are highly correlated, so the images are
         # comparable on WHERE the mass sits, which is the point of the comparison.
-        pos, amp = reference_positions(rec, a.control or "monopole")
+        ptp = np.ptp(np.asarray(rec.waveforms), axis=2).max(1).astype(np.float32)
+        if a.control in ("anchor_ptp", "anchor_flat"):
+            # the collapse control: every spike at its peak channel, waveform discarded
+            pos = np.empty((rec.n_spikes, 3), np.float32)
+            pos[:, :2] = rec.anchors[rec.spike_channels][:, :2]
+            pos[:, 2] = 20.0
+            amp = ptp if a.control == "anchor_ptp" else np.ones(rec.n_spikes, np.float32)
+        else:
+            pos = rec.mp_xyz.astype(np.float32).copy()
+            amp = ptp
     else:
-        anc = rec.anchors[rec.spike_channels][:, :2]
-        pos = np.empty((rec.n_spikes, 3), np.float32)
-        pos[:, :2] = anc + mu[KS][:, :2]
-        pos[:, 2] = mu[KS][:, 2]
+        if "pos_xyz" in ck:
+            pos = ck["pos_xyz"]
+        else:
+            anc = rec.anchors[rec.spike_channels][:, :2]
+            pos = np.empty((rec.n_spikes, 3), np.float32)
+            pos[:, :2] = anc + mu[KS][:, :2]
+            pos[:, 2] = mu[KS][:, 2]
         amp = np.linalg.norm(V, axis=1).astype(np.float32)
+    sfx = SUFFIX[a.correct or "none"]
+    if sfx:
+        pos = pos.copy()
+        pos[:, 1] -= correction(a.out, a.tag, a.correct, rec.spike_times, rec.fs, y=pos[:, 1].copy())
     sec = np.floor(rec.spike_times / rec.fs).astype(np.int64)
     nb = int(sec.max()) + 1
     order = np.argsort(sec, kind="stable")
@@ -259,8 +283,8 @@ def main():
             sb = img[img > 0]
             if sb.size:
                 hi[k] = max(hi[k], float(np.percentile(sb, 99.7)))
-    for name, ylim, h in (("It_zoom", (400., 900.), 7.0),
-                          ("It_full", (g.y_lo, g.y_lo + g.ny * g.y_bin), 13.0)):
+    for name, ylim, h in ((f"It_zoom{sfx}", (400., 900.), 7.0),
+                          (f"It_full{sfx}", (g.y_lo, g.y_lo + g.ny * g.y_bin), 13.0)):
         span = ylim[1] - ylim[0]
         wx, wz = g.nx * g.x_bin, g.nz * g.z_bin
         fw = min(15.0, h * (wx + wz) / span + 1.4)
