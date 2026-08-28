@@ -1,8 +1,7 @@
 """Deterministic session-0013 rho-localizer fixture and timing harness.
 
-This launcher deliberately calls the production localizer without changing it.
-It captures a fixed batch from a saved pursuit chunk, records every field that
-later speedup phases must preserve, and times warmed calls on the same inputs.
+This launcher compares an explicit-identity reference with a candidate
+identity fast path on fixed inputs from a saved pursuit chunk.
 """
 
 import argparse
@@ -61,8 +60,10 @@ def identity_transforms(events, channels):
     ).copy()
 
 
-def localize(coords, waveforms, mask, omega, config):
-    transforms = identity_transforms(len(waveforms), waveforms.shape[1])
+def localize(coords, waveforms, mask, omega, config, identity_fast_path):
+    transforms = None if identity_fast_path else identity_transforms(
+        len(waveforms), waveforms.shape[1]
+    )
     return localize_spikes_fixed_codebook(
         coords,
         waveforms,
@@ -119,24 +120,21 @@ def main():
     coords, waveforms, mask, omega, config, chunk_path = load_fixture(
         args.run, args.chunk, args.events
     )
+    reference = localize(coords, waveforms, mask, omega, config, False)
     for _ in range(args.warmups):
-        localize(coords, waveforms, mask, omega, config)
+        localize(coords, waveforms, mask, omega, config, True)
     torch.cuda.synchronize()
     torch.cuda.reset_peak_memory_stats()
 
-    reference = None
     timings = []
     comparisons = []
     for _ in range(args.repeats):
         torch.cuda.synchronize()
         started = perf_counter()
-        output = localize(coords, waveforms, mask, omega, config)
+        output = localize(coords, waveforms, mask, omega, config, True)
         torch.cuda.synchronize()
         timings.append(perf_counter() - started)
-        if reference is None:
-            reference = output
-        else:
-            comparisons.append(compare(reference, output))
+        comparisons.append(compare(reference, output))
 
     args.output.parent.mkdir(parents=True, exist_ok=True)
     np.savez_compressed(
@@ -155,6 +153,8 @@ def main():
         "median_seconds": float(np.median(timings)),
         "range_seconds": [float(min(timings)), float(max(timings))],
         "peak_allocated_bytes": int(torch.cuda.max_memory_allocated()),
+        "reference": "explicit per-event identity transforms",
+        "candidate": "spatial_transform=None identity fast path",
         "repeat_comparisons": comparisons,
     }
     args.output.with_suffix(".json").write_text(json.dumps(result, indent=2) + "\n")

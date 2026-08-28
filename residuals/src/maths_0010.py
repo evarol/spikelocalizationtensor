@@ -42,9 +42,8 @@ def _continuous_refine(off, projected, temporal, source_grid, profile_index,
         raw = sigma[:, None] / torch.sqrt(
             dxy2 + source[:, None, 2].square() + sigma[:, None].square()
         )
-        atom = _normalize(
-            torch.einsum("bc,bcd->bd", raw, transform) * mask
-        )
+        white = raw if transform is None else torch.einsum("bc,bcd->bd", raw, transform)
+        atom = _normalize(white * mask)
         response = (atom * chosen_projection).sum(1)
         return atom, response.square() / temporal_energy, response
 
@@ -109,7 +108,8 @@ def _continuous_refine_rho(off, projected, temporal, source_grid, profile_index,
         )
         rho = state[:, 2]
         raw = rho[:, None] / torch.sqrt(dxy2 + rho[:, None].square())
-        atom = _normalize(torch.einsum("bc,bcd->bd", raw, transform) * mask)
+        white = raw if transform is None else torch.einsum("bc,bcd->bd", raw, transform)
+        atom = _normalize(white * mask)
         response = (atom * chosen_projection).sum(1)
         return atom, response.square(), response
 
@@ -154,7 +154,7 @@ def _atoms(off, sources, profiles, transform, mask):
     atoms = []
     for name, params in profiles:
         raw = KERNELS[name](dxy2, dz2, params)
-        white = torch.einsum("bkc,bcd->bkd", raw, transform)
+        white = raw if transform is None else torch.einsum("bkc,bcd->bkd", raw, transform)
         atoms.append(_normalize(white * mask[:, None]))
     return torch.stack(atoms, dim=-1)
 
@@ -167,7 +167,8 @@ def _selected_monopole_atoms(off, candidates, profile_sigmas, profile_index,
     )
     sigma = profile_sigmas[profile_index][:, None, None]
     raw = sigma / torch.sqrt(dxy2 + candidates[:, :, None, 2].square() + sigma.square())
-    return _normalize(torch.einsum("bkc,bcd->bkd", raw, transform) * mask[:, None])
+    white = raw if transform is None else torch.einsum("bkc,bcd->bkd", raw, transform)
+    return _normalize(white * mask[:, None])
 
 
 def _choose(off, projected, omega, sources, profiles, transform, mask,
@@ -234,7 +235,7 @@ def localize_spikes_fixed_codebook(
     """GPU localize/reconstruct in the same whitening coordinates as ``Y``.
 
     ``spatial_transform[n]`` maps raw local channel amplitudes to the local
-    whitened output channels for event ``n``.
+    whitened output channels for event ``n``. ``None`` is the identity path.
     """
     if device is None:
         device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -246,9 +247,11 @@ def localize_spikes_fixed_codebook(
         mask_np = np.ones((n_events, n_channels), dtype=bool)
     else:
         mask_np = np.asarray(mask, dtype=bool)
-    transform_np = np.asarray(spatial_transform, dtype=np.float32)
-    if transform_np.shape != (n_events, n_channels, n_channels):
-        raise ValueError("spatial_transform must have shape (N, C, C)")
+    transform_np = None
+    if spatial_transform is not None:
+        transform_np = np.asarray(spatial_transform, dtype=np.float32)
+        if transform_np.shape != (n_events, n_channels, n_channels):
+            raise ValueError("spatial_transform must have shape (N, C, C)")
     if omega_np.shape[1] != n_time:
         raise ValueError("omega and waveform lengths differ")
     profiles = build_profiles(kernels, n_scales)
@@ -260,7 +263,7 @@ def localize_spikes_fixed_codebook(
     values = torch.as_tensor(values_np, device=device)
     offsets = torch.as_tensor(off_np, device=device)
     valid = torch.as_tensor(mask_np, device=device)
-    transforms = torch.as_tensor(transform_np, device=device)
+    transforms = None if transform_np is None else torch.as_tensor(transform_np, device=device)
     values = values.masked_fill(~valid[:, :, None], 0)
     temporal = _normalize(torch.as_tensor(omega_np, device=device))
     projected = torch.einsum("nct,qt->ncq", values, temporal)
@@ -286,7 +289,8 @@ def localize_spikes_fixed_codebook(
             for index, (name, params) in enumerate(chosen_profiles):
                 dxy2 = ((offsets[index, :, 0][None] - candidates[index, :, 0, None]).square() + (offsets[index, :, 1][None] - candidates[index, :, 1, None]).square())
                 raw[index] = KERNELS[name](dxy2, candidates[index, :, 2, None].square(), params)
-            atoms = _normalize(torch.einsum("bkc,bcd->bkd", raw, transforms) * valid[:, None])
+            white = raw if transforms is None else torch.einsum("bkc,bcd->bkd", raw, transforms)
+            atoms = _normalize(white * valid[:, None])
         response = torch.einsum("bkc,bcq->bkq", atoms, projected)
         score = response.square() / temporal.square().sum(1)[None, None]
         flat = score.flatten(1).argmax(1)
@@ -332,7 +336,8 @@ def localize_spikes_fixed_codebook(
             + (offsets[:, :, 1] - source[:, None, 1]).square()
         )
         raw = rho[:, None] / torch.sqrt(dxy2 + rho[:, None].square())
-        atom = _normalize(torch.einsum("bc,bcd->bd", raw, transforms) * valid)
+        white = raw if transforms is None else torch.einsum("bc,bcd->bd", raw, transforms)
+        atom = _normalize(white * valid)
     elif continuous:
         source, alpha, captured, continuous_displacement = _continuous_refine(
             offsets, projected, temporal_index, sources_grid, profile_index,
@@ -347,7 +352,8 @@ def localize_spikes_fixed_codebook(
         raw = selected_sigma[:, None] / torch.sqrt(
             dxy2 + source[:, None, 2].square() + selected_sigma[:, None].square()
         )
-        atom = _normalize(torch.einsum("bc,bcd->bd", raw, transforms) * valid)
+        white = raw if transforms is None else torch.einsum("bc,bcd->bd", raw, transforms)
+        atom = _normalize(white * valid)
     prediction = alpha[:, None, None] * atom[:, :, None] * temporal[temporal_index, None]
     input_energy = values.square().sum((1, 2))
     return {

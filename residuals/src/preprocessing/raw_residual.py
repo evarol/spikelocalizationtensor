@@ -294,8 +294,10 @@ def localize_configured(local_coords, waveforms, ids, mask, omega, config,
             continuous_max_iterations=config.continuous_max_iterations,
             continuous_backtracks=config.continuous_backtracks,
             identifiable_rho=config.identifiable_rho,
-            spatial_transform=local_whitening_transforms(
-                ids, mask, whitening_matrix
+            spatial_transform=(
+                None if config.whitening == "none" else local_whitening_transforms(
+                    ids, mask, whitening_matrix
+                )
             ),
         )
     return localize_spikes_fixed_codebook(

@@ -15,7 +15,7 @@ set -euo pipefail
 
 ROOT=/scratch/ap7151/iclr-paper/varol-version
 RUN="$ROOT/residuals/runs/dataset1_p1/unwhitened_rho_0011_vectorized_full"
-OUTPUT="$ROOT/runs/dataset1_p1/0013_rho_speedup/reference_chunk100"
+OUTPUT="$ROOT/runs/dataset1_p1/0013_rho_speedup/identity_fast_path_chunk100"
 cd "$ROOT"
 
 singularity exec --nv --overlay /scratch/${USER}/_ENVS/pytorch.ext3:ro \
