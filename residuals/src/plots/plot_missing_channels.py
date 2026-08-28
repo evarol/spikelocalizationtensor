@@ -201,7 +201,7 @@ def main():
     parser.add_argument("--session", type=Path, required=True)
     parser.add_argument("--recording", type=Path, required=True)
     parser.add_argument("--out", type=Path,
-                        default=Path("out/plots/missing_channels"))
+                        default=Path("residuals/out/plots/missing_channels"))
     args = parser.parse_args()
 
     counts = np.asarray(np.load(args.session / "neighbor_counts.npy", mmap_mode="r"))

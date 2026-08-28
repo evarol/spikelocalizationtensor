@@ -19,7 +19,7 @@ case "$KERNEL" in
 esac
 
 ROOT=/scratch/ap7151/iclr-paper/ANALYTIC_APPROACH
-SESSION=$ROOT/runs/dataset1_p1
+SESSION=$ROOT/residuals/runs/dataset1_p1
 RESULT=$SESSION/gpu_fit_voxel_1um_masked_${KERNEL}.npz
 
 if [[ -e "$RESULT" ]]; then

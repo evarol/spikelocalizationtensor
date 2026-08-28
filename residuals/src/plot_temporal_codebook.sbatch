@@ -17,8 +17,8 @@ case "$KERNEL" in
 esac
 
 ROOT=/scratch/ap7151/iclr-paper/ANALYTIC_APPROACH
-FIT=$ROOT/runs/dataset1_p1/gpu_fit_voxel_1um_${KERNEL}.npz
-OUT=$ROOT/out/plots/gpu_fit_voxel_1um_${KERNEL}/temporal_codebook.png
+FIT=$ROOT/residuals/runs/dataset1_p1/gpu_fit_voxel_1um_${KERNEL}.npz
+OUT=$ROOT/residuals/out/plots/gpu_fit_voxel_1um_${KERNEL}/temporal_codebook.png
 
 singularity exec --nv --overlay /scratch/${USER}/_ENVS/pytorch.ext3:ro \
     /share/apps/images/cuda12.8.1-cudnn9.8.0-ubuntu24.04.2.sif \

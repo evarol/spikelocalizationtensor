@@ -13,7 +13,7 @@ set -euo pipefail
 
 ROOT=/scratch/ap7151/iclr-paper/ANALYTIC_APPROACH
 RECORDING=/scratch/ap7151/_RAW_DATA/extra-motion/dataset1_p1/p1_g0_t0.imec0.ap.bin
-OUTPUT=$ROOT/out/global_codebook_per_q_16344946
+OUTPUT=$ROOT/residuals/out/global_codebook_per_q_16344946
 
 if [[ -e "$OUTPUT" ]]; then
     echo "output already exists: $OUTPUT" >&2
@@ -41,7 +41,7 @@ RUN_NAMES=(
 
 for index in "${!Q_VALUES[@]}"; do
     Q=${Q_VALUES[$index]}
-    RUN=$ROOT/runs/dataset1_p1/${RUN_NAMES[$index]}
+    RUN=$ROOT/residuals/runs/dataset1_p1/${RUN_NAMES[$index]}
     Q_OUTPUT=$OUTPUT/q${Q}
     ADAPTER=$Q_OUTPUT/.adapter
     mkdir -p "$ADAPTER/reconstruction_session"

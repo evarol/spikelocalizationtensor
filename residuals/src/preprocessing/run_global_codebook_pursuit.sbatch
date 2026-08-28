@@ -15,7 +15,7 @@ set -euo pipefail
 
 ROOT=/scratch/ap7151/iclr-paper/ANALYTIC_APPROACH
 RECORDING=/scratch/ap7151/_RAW_DATA/extra-motion/dataset1_p1/p1_g0_t0.imec0.ap.bin
-SESSION=$ROOT/runs/dataset1_p1
+SESSION=$ROOT/residuals/runs/dataset1_p1
 CODEBOOK_DIR=${CODEBOOK_DIR:?set CODEBOOK_DIR to the completed raw codebook run}
 Q_VALUES=(8 16 24 32)
 Q=${Q_OVERRIDE:-${Q_VALUES[$SLURM_ARRAY_TASK_ID]}}

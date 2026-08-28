@@ -51,7 +51,7 @@ def main() -> None:
     parser.add_argument(
         "--output",
         type=Path,
-        default=Path("out/plots/synthetic_lattice_footprints.png"),
+        default=Path("residuals/out/plots/synthetic_lattice_footprints.png"),
     )
     args = parser.parse_args()
 

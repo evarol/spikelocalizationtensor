@@ -14,8 +14,8 @@ set -euo pipefail
 
 ROOT=/scratch/ap7151/iclr-paper/ANALYTIC_APPROACH
 RECORDING=/scratch/ap7151/_RAW_DATA/extra-motion/dataset1_p1/p1_g0_t0.imec0.ap.bin
-CODEBOOK=$ROOT/runs/dataset1_p1/raw_peak_channel_codebooks_16358267/global_codebook_q8.npz
-OUTPUT=$ROOT/runs/dataset1_p1/peak_channel_q8_delta_chi2_${SLURM_JOB_ID}
+CODEBOOK=$ROOT/residuals/runs/dataset1_p1/raw_peak_channel_codebooks_16358267/global_codebook_q8.npz
+OUTPUT=$ROOT/residuals/runs/dataset1_p1/peak_channel_q8_delta_chi2_${SLURM_JOB_ID}
 
 if [[ ! -e "$RECORDING" || ! -e "$CODEBOOK" ]]; then
     echo "missing recording or Q8 codebook" >&2

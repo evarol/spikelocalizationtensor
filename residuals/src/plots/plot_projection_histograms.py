@@ -94,7 +94,7 @@ def main():
     comparison.add_argument("--monopole", type=Path)
     comparison.add_argument("--continuous", type=Path)
     parser.add_argument("--out", type=Path,
-                        default=Path("out/plots/gpu_fit/projections"))
+                        default=Path("residuals/out/plots/gpu_fit/projections"))
     args = parser.parse_args()
 
     analytic = load_analytic(args.session, args.fit)

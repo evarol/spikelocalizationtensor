@@ -14,9 +14,9 @@ set -euo pipefail
 
 ROOT=/scratch/ap7151/iclr-paper/ANALYTIC_APPROACH
 RECORDING=/scratch/ap7151/_RAW_DATA/extra-motion/dataset1_p1/p1_g0_t0.imec0.ap.bin
-OMEGA_FIT=$ROOT/runs/dataset1_p1/gpu_fit_voxel_1um_masked_monopole.npz
+OMEGA_FIT=$ROOT/residuals/runs/dataset1_p1/gpu_fit_voxel_1um_masked_monopole.npz
 DURATION_SECONDS=${DURATION_SECONDS:-10}
-OUTPUT=$ROOT/runs/dataset1_p1/raw_template_residual_smoke_${SLURM_JOB_ID}
+OUTPUT=$ROOT/residuals/runs/dataset1_p1/raw_template_residual_smoke_${SLURM_JOB_ID}
 
 if [[ ! -e "$RECORDING" || ! -e "$OMEGA_FIT" ]]; then
     echo "missing recording or temporal-codebook fit" >&2

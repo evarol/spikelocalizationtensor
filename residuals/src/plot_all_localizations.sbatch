@@ -12,9 +12,9 @@
 set -euo pipefail
 
 ROOT=/scratch/ap7151/iclr-paper/ANALYTIC_APPROACH
-SESSION=$ROOT/runs/dataset1_p1
+SESSION=$ROOT/residuals/runs/dataset1_p1
 MONO=/scratch/ap7151/sln-v2/runs/dataset1_p1/monopolar_true/localizations.npy
-OUT=$ROOT/out/plots/gpu_fit_voxel_1um_all_kernels
+OUT=$ROOT/residuals/out/plots/gpu_fit_voxel_1um_all_kernels
 
 singularity exec --nv --overlay /scratch/${USER}/_ENVS/pytorch.ext3:ro \
     /share/apps/images/cuda12.8.1-cudnn9.8.0-ubuntu24.04.2.sif \

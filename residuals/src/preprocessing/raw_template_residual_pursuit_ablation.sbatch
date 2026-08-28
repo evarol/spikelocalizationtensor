@@ -14,7 +14,7 @@ set -euo pipefail
 
 ROOT=/scratch/ap7151/iclr-paper/ANALYTIC_APPROACH
 RECORDING=/scratch/ap7151/_RAW_DATA/extra-motion/dataset1_p1/p1_g0_t0.imec0.ap.bin
-INITIAL_OMEGA=$ROOT/runs/dataset1_p1/gpu_fit_voxel_1um_masked_monopole.npz
+INITIAL_OMEGA=$ROOT/residuals/runs/dataset1_p1/gpu_fit_voxel_1um_masked_monopole.npz
 MODE=${MODE:?set MODE to frozen, learned, or learned_stopped}
 CHUNK_SECONDS=2.187
 DURATION_SECONDS=8.748
@@ -41,7 +41,7 @@ case "$MODE" in
         ;;
 esac
 
-OUTPUT=$ROOT/runs/dataset1_p1/raw_template_residual_${MODE}_65610_${SLURM_JOB_ID}
+OUTPUT=$ROOT/residuals/runs/dataset1_p1/raw_template_residual_${MODE}_65610_${SLURM_JOB_ID}
 
 if [[ ! -e "$RECORDING" || ! -e "$OMEGA_FIT" ]]; then
     echo "missing recording or temporal codebook: $RECORDING $OMEGA_FIT" >&2

@@ -21,8 +21,8 @@ RUN_NAMES=(
     global_codebook_pursuit_q32_matched_16344946_3
 )
 Q=${Q_VALUES[$SLURM_ARRAY_TASK_ID]}
-RUN=$ROOT/runs/dataset1_p1/${RUN_NAMES[$SLURM_ARRAY_TASK_ID]}
-OUTPUT=$ROOT/out/global_codebook_per_q_16344946/q${Q}
+RUN=$ROOT/residuals/runs/dataset1_p1/${RUN_NAMES[$SLURM_ARRAY_TASK_ID]}
+OUTPUT=$ROOT/residuals/out/global_codebook_per_q_16344946/q${Q}
 
 if [[ ! -d "$RUN" || ! -d "$OUTPUT" ]]; then
     echo "missing run or output directory: $RUN $OUTPUT" >&2

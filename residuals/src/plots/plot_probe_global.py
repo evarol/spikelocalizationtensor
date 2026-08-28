@@ -38,7 +38,7 @@ def main():
     ap.add_argument("--session", type=Path, required=True)
     ap.add_argument("--fit", type=Path, required=True)
     ap.add_argument("--recording", type=Path, required=True)
-    ap.add_argument("--out", type=Path, default=Path("out/plots/gpu_fit/probe_global.png"))
+    ap.add_argument("--out", type=Path, default=Path("residuals/out/plots/gpu_fit/probe_global.png"))
     args = ap.parse_args()
 
     fit = np.load(args.fit)

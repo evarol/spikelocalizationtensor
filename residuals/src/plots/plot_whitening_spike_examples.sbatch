@@ -13,10 +13,10 @@
 set -euo pipefail
 
 ROOT=/scratch/ap7151/iclr-paper/ANALYTIC_APPROACH
-RUN=${RUN:-$ROOT/runs/dataset1_p1/raw_template_residual_batched_4s_16257633}
+RUN=${RUN:-$ROOT/residuals/runs/dataset1_p1/raw_template_residual_batched_4s_16257633}
 CHUNK_INDEX=${CHUNK_INDEX:-0}
 SEED=${SEED:-42}
-OUT=${OUT:-$ROOT/out/plots/whitening_spike_examples_4s_${SLURM_JOB_ID}.png}
+OUT=${OUT:-$ROOT/residuals/out/plots/whitening_spike_examples_4s_${SLURM_JOB_ID}.png}
 
 echo "=== whitening diagnostic for poor reconstruction examples ==="
 echo "Job ID: $SLURM_JOB_ID"

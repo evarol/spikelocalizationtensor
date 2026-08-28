@@ -13,7 +13,7 @@ set -euo pipefail
 
 ROOT=/scratch/ap7151/iclr-paper/ANALYTIC_APPROACH
 RUN_DIR=${RUN_DIR:?set RUN_DIR to the first-fit extractor output}
-OUTPUT=$ROOT/out/plots/${RUN_DIR##*/}
+OUTPUT=$ROOT/residuals/out/plots/${RUN_DIR##*/}
 
 singularity exec --overlay /scratch/${USER}/_ENVS/pytorch.ext3:ro \
     /share/apps/images/cuda12.8.1-cudnn9.8.0-ubuntu24.04.2.sif \

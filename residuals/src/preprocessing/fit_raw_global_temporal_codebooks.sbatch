@@ -14,7 +14,7 @@ set -euo pipefail
 
 ROOT=/scratch/ap7151/iclr-paper/ANALYTIC_APPROACH
 RECORDING=/scratch/ap7151/_RAW_DATA/extra-motion/dataset1_p1/p1_g0_t0.imec0.ap.bin
-SESSION=$ROOT/runs/dataset1_p1
+SESSION=$ROOT/residuals/runs/dataset1_p1
 OUTPUT_DIR=${OUTPUT_DIR:-$SESSION/raw_global_codebooks_${SLURM_JOB_ID}}
 
 if [[ ! -e "$RECORDING" ]]; then

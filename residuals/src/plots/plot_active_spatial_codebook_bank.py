@@ -29,7 +29,7 @@ def normalized_footprint(sigma: float) -> np.ndarray:
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument(
-        "--output", type=Path, default=Path("out/plots/active_spatial_codebook_bank.png")
+        "--output", type=Path, default=Path("residuals/out/plots/active_spatial_codebook_bank.png")
     )
     args = parser.parse_args()
 

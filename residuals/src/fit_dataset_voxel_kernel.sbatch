@@ -17,7 +17,7 @@ KERNELS=(monopole exponential gauss lorentz power student yukawa dog gauss_aniso
 KERNEL=${KERNELS[$SLURM_ARRAY_TASK_ID]}
 
 ROOT=/scratch/ap7151/iclr-paper/ANALYTIC_APPROACH
-SESSION=$ROOT/runs/dataset1_p1
+SESSION=$ROOT/residuals/runs/dataset1_p1
 RESULT=$SESSION/gpu_fit_voxel_1um_${KERNEL}.npz
 
 if [[ -e "$RESULT" ]]; then

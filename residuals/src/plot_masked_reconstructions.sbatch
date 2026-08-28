@@ -15,9 +15,9 @@ set -euo pipefail
 KERNELS=(monopole exponential gauss lorentz power student yukawa dog gauss_aniso mono_aniso)
 KERNEL=${KERNELS[$SLURM_ARRAY_TASK_ID]}
 ROOT=/scratch/ap7151/iclr-paper/ANALYTIC_APPROACH
-SESSION=$ROOT/runs/dataset1_p1
+SESSION=$ROOT/residuals/runs/dataset1_p1
 FIT=$SESSION/gpu_fit_voxel_1um_masked_${KERNEL}.npz
-OUT=$ROOT/out/plots/gpu_fit_voxel_1um_masked_${KERNEL}/reconstruction
+OUT=$ROOT/residuals/out/plots/gpu_fit_voxel_1um_masked_${KERNEL}/reconstruction
 
 if [[ ! -e "$FIT" ]]; then
     echo "fit does not exist: $FIT" >&2

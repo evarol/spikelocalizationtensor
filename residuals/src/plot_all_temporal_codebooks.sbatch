@@ -12,8 +12,8 @@
 set -euo pipefail
 
 ROOT=/scratch/ap7151/iclr-paper/ANALYTIC_APPROACH
-SESSION=$ROOT/runs/dataset1_p1
-OUT=$ROOT/out/plots/gpu_fit_voxel_1um_all_kernels/temporal_codebooks_5x2.png
+SESSION=$ROOT/residuals/runs/dataset1_p1
+OUT=$ROOT/residuals/out/plots/gpu_fit_voxel_1um_all_kernels/temporal_codebooks_5x2.png
 
 if [[ -e "$OUT" ]]; then
     echo "plot already exists: $OUT" >&2

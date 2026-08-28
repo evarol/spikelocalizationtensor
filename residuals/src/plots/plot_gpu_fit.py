@@ -13,7 +13,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--session", type=Path, required=True)
     ap.add_argument("--fit", type=Path, required=True)
-    ap.add_argument("--out", type=Path, default=Path("out/plots/gpu_fit"))
+    ap.add_argument("--out", type=Path, default=Path("residuals/out/plots/gpu_fit"))
     ap.add_argument("--max-points", type=int, default=200_000)
     args = ap.parse_args()
     args.out.mkdir(parents=True, exist_ok=True)

@@ -13,7 +13,7 @@
 set -euo pipefail
 
 ROOT=/scratch/ap7151/iclr-paper/ANALYTIC_APPROACH
-SESSION=$ROOT/runs/dataset1_p1
+SESSION=$ROOT/residuals/runs/dataset1_p1
 RESULT=$SESSION/gpu_fit_gauss.npz
 
 echo "=== Gaussian GPU spike model fit ==="
