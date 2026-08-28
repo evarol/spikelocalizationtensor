@@ -128,7 +128,7 @@ def arrow(ax, start, end, color=None, linewidth=1.6):
 
 
 def build_figure():
-    fig, ax = plt.subplots(figsize=(18, 10))
+    fig, ax = plt.subplots(figsize=(18, 11))
     fig.patch.set_facecolor("white")
     ax.set_xlim(0, 1)
     ax.set_ylim(0, 1)
@@ -137,7 +137,7 @@ def build_figure():
     ax.text(
         0.5,
         0.965,
-        "Peak-Channel Codebook Greedy Pursuit",
+        "XYZ-Sigma Residual Pursuit",
         ha="center",
         va="center",
         fontsize=23,
@@ -147,33 +147,33 @@ def build_figure():
     ax.text(
         0.5,
         0.930,
-        "learn temporal shapes once → constrained spatial scoring → IBL-style projection-threshold maxima → fit and subtract",
+        "one frozen temporal codebook row × one discrete monopole footprint × one gain per event",
         ha="center",
         va="center",
         fontsize=11,
         color=COLORS["muted"],
     )
 
-    panel(ax, 0.640, 0.240, "A  LEARN AND FREEZE THE TEMPORAL CODEBOOKS", COLORS["orange"])
+    panel(ax, 0.650, 0.225, "A  CALIBRATION: LEARN AND FREEZE ONE Q=8 TEMPORAL CODEBOOK", COLORS["orange"])
     recording = node(
-        ax, 0.055, 0.690, 0.125, 0.110,
+        ax, 0.045, 0.700, 0.125, 0.105,
         "SpikeGLX recording", "AP data\n30 kHz × 384 channels", COLORS["blue"]
     )
     preprocess = node(
-        ax, 0.210, 0.690, 0.145, 0.110,
-        "Preprocess chunks", "300–6,000 Hz band-pass\nmedian subtraction + MAD", COLORS["blue"]
+        ax, 0.195, 0.700, 0.145, 0.105,
+        "Preprocess", "band-pass + common-median\nreference", COLORS["blue"]
     )
     detect = node(
-        ax, 0.385, 0.690, 0.145, 0.110,
-        "Voltage-peak sweep", "−voltage / MAD ≥ 6\nlocal maxima + 1 ms isolation", COLORS["orange"]
+        ax, 0.365, 0.700, 0.145, 0.105,
+        "Calibration detection", "32 deterministic recording-wide\nchunks · negative peaks", COLORS["orange"]
     )
     sample = node(
-        ax, 0.560, 0.690, 0.145, 0.110,
-        "Peak-channel sample", "90 samples per event\n≤100k events · seed 42", COLORS["orange"]
+        ax, 0.535, 0.700, 0.145, 0.105,
+        "Isolated event shards", "≤100k events · 1 ms isolation\nlocal geometry + fixed seed", COLORS["orange"]
     )
     learn = node(
-        ax, 0.735, 0.680, 0.210, 0.130,
-        "Cluster and freeze Omega_Q", "absolute-correlation assignment + signed row refit\nQ = 4, 8, 16, 32, 64 · no pursuit updates", COLORS["orange"], body_size=7.7
+        ax, 0.705, 0.690, 0.250, 0.125,
+        "Alternating discrete fit → frozen Omega", "geometry-grouped (x,y,z,sigma,q) assignment\nclosed-form row refit · 10 iterations · Q=8", COLORS["orange"], body_size=7.6
     )
     for left, right in zip(
         (recording, preprocess, detect, sample),
@@ -181,37 +181,26 @@ def build_figure():
     ):
         arrow(ax, edge(left, "right"), edge(right, "left"))
 
-    ax.text(
-        0.5,
-        0.610,
-        "The pursuit threshold is a post-convolution candidate gate, analogous to IBL sorter Th; there is no threshold-calibration stage.",
-        ha="center",
-        va="center",
-        fontsize=9.5,
-        fontweight="bold",
-        color=COLORS["muted"],
-    )
-
-    panel(ax, 0.205, 0.355, "B  RUN IBL-STYLE TEMPLATE PURSUIT FOR EACH Q", COLORS["green"])
+    panel(ax, 0.220, 0.365, "B  FRESH FOUR-PASS RESIDUAL PURSUIT IN ONE-SECOND CHUNKS", COLORS["green"])
     pursuit_input = node(
-        ax, 0.055, 0.390, 0.145, 0.095,
-        "Current residual", "preprocessed chunk\n+ frozen Omega_Q", COLORS["green"], body_size=7.5
+        ax, 0.045, 0.410, 0.145, 0.100,
+        "Current residual", "fresh preprocessed chunk\nor prior accepted subtraction", COLORS["green"], body_size=7.4
     )
     pursuit_score = node(
-        ax, 0.230, 0.390, 0.145, 0.095,
-        "① Dense scoring", "convolve every window\nover rows × anchored footprints", COLORS["green"], body_size=7.5
+        ax, 0.220, 0.410, 0.145, 0.100,
+        "① Peak proposal + NMS", "negative peaks · score ≥ 8\nstable time/channel ordering", COLORS["green"], body_size=7.4
     )
     pursuit_detect = node(
-        ax, 0.405, 0.390, 0.145, 0.095,
-        "② Candidate gate", "projection score ≥ 6\nspace-time local maxima", COLORS["green"], body_size=7.5
+        ax, 0.395, 0.410, 0.180, 0.100,
+        "② Grouped discrete fit", "select q, x, y, z, sigma, alpha\nby local least squares", COLORS["green"], body_size=7.3
     )
     localize = node(
-        ax, 0.580, 0.390, 0.165, 0.095,
-        "③ Localize + reconstruct", "fit xyz, sigma, row, signed gain\non the 8-channel residual", COLORS["green"], body_size=7.5
+        ax, 0.605, 0.410, 0.150, 0.100,
+        "③ Final-fit gates", "sqrt(captured energy) ≥ 8\nchannel RMSE ≤ 3", COLORS["red"], body_size=7.4
     )
     subtract = node(
-        ax, 0.775, 0.390, 0.165, 0.095,
-        "④ Refit gain + subtract", "accept positive residual reduction\nthrough configured capture / Delta chi2 gates", COLORS["red"], body_size=7.0
+        ax, 0.785, 0.410, 0.165, 0.100,
+        "④ Lock out + subtract", "exclude prior-pass events within\n0.5 ms / 48 um", COLORS["red"], body_size=7.3
     )
     for left, right in zip(
         (pursuit_input, pursuit_score, pursuit_detect, localize),
@@ -220,20 +209,20 @@ def build_figure():
         arrow(ax, edge(left, "right"), edge(right, "left"))
 
     spatial_bank = node(
-        ax, 0.405, 0.320, 0.340, 0.050,
-        "Active monopole bank", "sigma = 2, 4, ..., 512 um; fit x,y in [-150, 150] um and z in [1, 300] um.  sigma=1 and z=0 are excluded.",
+        ax, 0.395, 0.325, 0.360, 0.052,
+        "Discrete monopole dictionary", "sigma = 2, 4, ..., 512 um · x,y ∈ [-150, 150] um · z ∈ [1, 300] um · no rho refinement",
         COLORS["orange"], title_size=8.4, body_size=6.7
     )
-    arrow(ax, edge(spatial_bank, "top"), edge(localize, "bottom"), COLORS["arrow"], 1.3)
+    arrow(ax, edge(spatial_bank, "top"), edge(pursuit_detect, "bottom"), COLORS["arrow"], 1.3)
 
     guard = node(
-        ax, 0.600, 0.225, 0.340, 0.064,
-        "Round guard", "keep the round only if fractional core-energy drop ≥ 0.002 · stop by round 60", COLORS["red"], title_size=8.8, body_size=7.1
+        ax, 0.610, 0.245, 0.340, 0.062,
+        "Pass controller", "keep only positive energy reduction · advance through exactly four passes", COLORS["red"], title_size=8.8, body_size=7.1
     )
     arrow(ax, edge(subtract, "bottom"), edge(guard, "top"), COLORS["feedback"], 1.8)
     guard_left = edge(guard, "left")
     score_bottom = edge(pursuit_score, "bottom")
-    feedback_y = 0.305
+    feedback_y = 0.335
     ax.plot(
         [guard_left[0], score_bottom[0], score_bottom[0]],
         [guard_left[1], guard_left[1], feedback_y],
@@ -243,9 +232,9 @@ def build_figure():
     )
     arrow(ax, (score_bottom[0], feedback_y), score_bottom, COLORS["feedback"], 1.9)
     ax.text(
-        0.390,
-        0.235,
-        "accepted round → updated residual → score again",
+        0.385,
+        0.248,
+        "accepted fits → updated residual → next pass",
         ha="center",
         va="center",
         fontsize=8,
@@ -256,12 +245,12 @@ def build_figure():
     )
 
     node(
-        ax, 0.030, 0.045, 0.650, 0.095,
-        "OUTPUT", "accepted events: time · channel · xyz (z >= 1 um) · sigma (>= 2 um) · temporal row · signed gain · projection score · energy · round\ncompare the five independent fixed projection-threshold Q runs", COLORS["gray"], title_size=10.5, body_size=7.6
+        ax, 0.030, 0.055, 0.650, 0.100,
+        "OUTPUT", "atomic chunk checkpoints → consolidated event arrays: time · channel · xyz · sigma · q · alpha · fitted score · pass · diagnostics\nroot Omega, geometry/neighborhood metadata, and optional residual-waveform shards", COLORS["gray"], title_size=10.3, body_size=7.45
     )
     node(
-        ax, 0.720, 0.045, 0.250, 0.095,
-        "FUTURE (NOT IMPLEMENTED)", "optionally prune redundant codebook rows\nby absolute correlation / cosine similarity", COLORS["future"], title_size=9.2, body_size=7.8, linestyle="dashed"
+        ax, 0.720, 0.055, 0.250, 0.100,
+        "RESUME", "completed calibration shards and chunks\nare skipped by --resume after requeue", COLORS["future"], title_size=9.2, body_size=7.8, linestyle="dashed"
     )
     return fig
 

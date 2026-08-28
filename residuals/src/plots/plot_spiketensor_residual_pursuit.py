@@ -44,7 +44,12 @@ def load_examples(run, count=4):
     path = sorted((run / "chunks").glob("chunk_*.npz"))[0]
     with np.load(path, allow_pickle=False) as archive:
         rows = np.argsort(archive["input_energy"])[-count:]
-        return {key: np.asarray(archive[key][rows]) for key in archive.files}, rows
+        event_count = len(archive["spike_times"])
+        return {
+            key: np.asarray(archive[key][rows])
+            for key in archive.files
+            if archive[key].ndim and archive[key].shape[0] == event_count
+        }, rows
 
 
 def plot_spikes(run, out, metadata):

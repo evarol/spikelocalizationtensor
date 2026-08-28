@@ -46,6 +46,8 @@ class Config:
     max_events_per_pass: int = 40000
     max_channel_normalized_rmse: float = 3.0
     min_captured_fraction: float = 0.05
+    min_fitted_projection: float = 0.0
+    cross_pass_lockout_ms: float = 0.0
     min_pass_energy_drop_fraction: float = 0.0
     spatial_score: str = "max-channel-rmse"
     codebook_chunks: int = 32
@@ -444,6 +446,23 @@ def detect_events(
     )
 
 
+def exclude_prior_detections(detected, prior_times, prior_channels, neighborhood,
+                             temporal_radius, n_samples, n_channels):
+    if not len(prior_times) or temporal_radius <= 0:
+        return detected
+    times, channels, *values = detected
+    occupied = torch.zeros((n_samples, n_channels), dtype=torch.float32, device=times.device)
+    occupied[prior_times, prior_channels] = 1
+    temporal = F.max_pool1d(
+        occupied.T[None], kernel_size=2 * temporal_radius + 1,
+        stride=1, padding=temporal_radius,
+    )[0].T.bool()
+    safe_ids, valid = neighborhood
+    blocked = temporal[:, safe_ids].masked_fill(~valid[None], False).any(dim=2)
+    keep = ~blocked[times, channels]
+    return (times[keep], channels[keep], *(value[keep] for value in values))
+
+
 def extract_waveforms_torch(
     residual,
     times,
@@ -703,6 +722,7 @@ def fit_spatial_batch(waveforms, offsets, mask, local_noise, omega, sites, axes,
     input_energy = (normalized.square() * mask[:, :, None]).sum(dim=(1, 2))
     residual_energy = ((residual / local_noise[:, :, None]).square() * mask[:, :, None]).sum(dim=(1, 2))
     captured_energy = (input_energy - residual_energy).clamp_min(0)
+    fitted_projection_score = torch.sqrt(captured_energy)
     captured_fraction = captured_energy / input_energy.clamp_min(EPS)
     rho = torch.sqrt(source[:, 2].square() + selected_sigma.square())
     return {
@@ -720,6 +740,7 @@ def fit_spatial_batch(waveforms, offsets, mask, local_noise, omega, sites, axes,
         "mean_channel_normalized_rmse": mean_channel_rmse,
         "input_energy": input_energy,
         "captured_energy": captured_energy,
+        "fitted_projection_score": fitted_projection_score,
         "captured_fraction": captured_fraction,
         "coarse_objective": coarse_objective,
         "objective": objective,
@@ -769,6 +790,7 @@ def empty_chunk(width, waveform_length, save_waveforms):
         "mean_channel_normalized_rmse": np.empty(0, dtype=np.float32),
         "input_energy": np.empty(0, dtype=np.float32),
         "captured_energy": np.empty(0, dtype=np.float32),
+        "fitted_projection_score": np.empty(0, dtype=np.float32),
         "captured_fraction": np.empty(0, dtype=np.float32),
         "refinement_levels": np.empty(0, dtype=np.uint8),
         "residual_pass": np.empty(0, dtype=np.int8),
@@ -821,6 +843,8 @@ def process_chunk(
     )
     parts = []
     pass_summaries = []
+    prior_times = torch.empty(0, dtype=torch.long, device=config.device)
+    prior_channels = torch.empty(0, dtype=torch.long, device=config.device)
     local_core_start = core_start - read_start
     local_core_stop = core_stop - read_start
     valid_start = max(n_before, local_core_start - n_after)
@@ -840,6 +864,11 @@ def process_chunk(
             fs,
             valid_start,
             valid_stop,
+        )
+        detected = exclude_prior_detections(
+            detected, prior_times, prior_channels, merge_neighborhood,
+            int(round(config.cross_pass_lockout_ms * fs / 1000)),
+            len(residual), residual.shape[1],
         )
         times, channels, detection_score, initial_sigma, initial_temporal = detected
         batch_results = []
@@ -875,6 +904,7 @@ def process_chunk(
                 & torch.isfinite(fit["maximum_channel_normalized_rmse"])
                 & (fit["maximum_channel_normalized_rmse"] <= config.max_channel_normalized_rmse)
                 & (fit["captured_fraction"] >= config.min_captured_fraction)
+                & (fit["fitted_projection_score"] >= config.min_fitted_projection)
             )
             batch_results.append(
                 {
@@ -947,6 +977,7 @@ def process_chunk(
                     "mean_channel_normalized_rmse": tensor_numpy(fit["mean_channel_normalized_rmse"], in_core).astype(np.float32),
                     "input_energy": tensor_numpy(fit["input_energy"], in_core).astype(np.float32),
                     "captured_energy": tensor_numpy(fit["captured_energy"], in_core).astype(np.float32),
+                    "fitted_projection_score": tensor_numpy(fit["fitted_projection_score"], in_core).astype(np.float32),
                     "captured_fraction": tensor_numpy(fit["captured_fraction"], in_core).astype(np.float32),
                     "refinement_levels": tensor_numpy(fit["refinement_levels"], in_core).astype(np.uint8),
                     "residual_pass": np.full(count, residual_pass, dtype=np.int8),
@@ -956,6 +987,14 @@ def process_chunk(
                     part["waveforms"] = tensor_numpy(batch["waveforms"], in_core).astype(np.float32)
                     part["predictions"] = tensor_numpy(fit["prediction"], in_core).astype(np.float32)
                 parts.append(part)
+            prior_times = torch.cat([
+                prior_times,
+                *[batch["times"][batch["accepted"]] for batch in batch_results],
+            ])
+            prior_channels = torch.cat([
+                prior_channels,
+                *[batch["channels"][batch["accepted"]] for batch in batch_results],
+            ])
         pass_summary = {
             "pass": residual_pass,
             "proposed": int(len(times)),
@@ -981,6 +1020,8 @@ def validate_config(config):
         raise ValueError("Q, outer passes, and number of scales must be positive")
     if config.fit_batch_size < 1 or config.site_block_size < 1:
         raise ValueError("fit and site block sizes must be positive")
+    if config.min_fitted_projection < 0 or config.cross_pass_lockout_ms < 0:
+        raise ValueError("fitted-projection threshold and cross-pass lockout must be nonnegative")
     if config.sigma_min_um <= 0 or config.sigma_max_um < config.sigma_min_um:
         raise ValueError("sigma bounds must be positive and ordered")
     if config.spatial_score not in ("max-channel-rmse", "mean-channel-rmse"):

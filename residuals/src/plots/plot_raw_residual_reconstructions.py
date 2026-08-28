@@ -75,10 +75,29 @@ def reconstruct_saved_fit(run, config, coordinates, ids, mask, sources,
         config["kernel"], profile_idx, config["n_scales"]
     )
     if not config.get("use_0010_math", False):
-        return reconstruct(
+        footprint, prediction = reconstruct(
             coordinates, mask, sources, parameters, omega, temporal_idx, alpha,
             config["kernel"],
         )
+        if not config.get("unnormalized_spatial_footprint", False):
+            return footprint, prediction
+        dxy2 = (
+            (coordinates[..., 0] - sources[:, None, 0]) ** 2
+            + (coordinates[..., 1] - sources[:, None, 1]) ** 2
+        )
+        footprint = kernel_values(
+            config["kernel"], dxy2, sources[:, None, 2] ** 2,
+            parameters[:, None, :],
+        ).astype(np.float32)
+        footprint *= mask
+        normalized_omega = omega / np.maximum(
+            np.linalg.norm(omega, axis=1, keepdims=True), EPS
+        )
+        prediction = (
+            alpha[:, None, None] * footprint[:, :, None]
+            * normalized_omega[temporal_idx, None, :]
+        )
+        return footprint, prediction
 
     whitening = np.load(run / "whitening_matrix.npy", mmap_mode="r")
     dxy2 = (

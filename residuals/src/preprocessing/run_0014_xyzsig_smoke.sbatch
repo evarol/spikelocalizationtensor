@@ -1,0 +1,23 @@
+#!/bin/bash
+#SBATCH --job-name=xyzsig0014-smoke
+#SBATCH --output=/scratch/ap7151/iclr-paper/varol-version/residuals/slurm_logs/%x_%j.out
+#SBATCH --error=/scratch/ap7151/iclr-paper/varol-version/residuals/slurm_logs/%x_%j.err
+#SBATCH --time=00:30:00
+#SBATCH --partition=l40s_public
+#SBATCH --nodes=1
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=4
+#SBATCH --mem=32G
+#SBATCH --gres=gpu:1
+#SBATCH --account=torch_pr_60_general
+
+set -euo pipefail
+
+ROOT=/scratch/ap7151/iclr-paper/varol-version
+RECORDING=/scratch/ap7151/_RAW_DATA/extra-motion/dataset1_p1/p1_g0_t0.imec0.ap.bin
+OUTPUT=$ROOT/runs/dataset1_p1/0014_xyzsig_smoke_${SLURM_JOB_ID}
+cd "$ROOT"
+
+singularity exec --nv --overlay /scratch/${USER}/_ENVS/ibl-sorter.ext3:ro \
+    /share/apps/images/cuda12.8.1-cudnn9.8.0-ubuntu24.04.2.sif \
+    /bin/bash -c "source /ext3/env.sh && python -m py_compile residuals/src/preprocessing/residuals_0012.py residuals/src/preprocessing/0014_xyzsig_residual.py && python residuals/src/preprocessing/0014_xyzsig_residual.py all $RECORDING $OUTPUT --duration-seconds 10"

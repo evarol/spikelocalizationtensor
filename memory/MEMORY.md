@@ -6,7 +6,9 @@ ANALYTIC_APPROACH
 - [User Profile](user_me.md) — working style and constraints, including outside-sandbox SLURM commands and memory-only session notes
 
 ## Sessions
-- [Rho Localization Optimization Plan](session-013-rho-localization-optimization-plan.md) — HIGH PRIORITY: output-preserving plan to port Q12-style geometry caching, skip identity transforms, cache GPU constants, and vectorize first-improving rho line searches.
+- [Score-Calibrated XYZ-Sigma Promotion](session-015-score-calibrated-xyzsigma-promotion.md) — HIGH PRIORITY: full score-8 `16513755` and corrected score-6 `16514699` four-pass runs are running on separate accounts; smoke/audit/plots passed, while score-boundary review and empirical-null calibration remain pending.
+- [XYZ-Sigma Residual Pursuit](session-014-xyzsigma-residual-pursuit.md) — HIGH PRIORITY: CUDA-valid discrete xyz-sigma pursuit has final projection gating, cross-pass duplicate suppression, compatible waveform outputs, and a completed score-8 validation chain.
+- [Rho Localization Optimization Plan](session-013-rho-localization-optimization-plan.md) — HIGH PRIORITY: identity-transform fast path is bitwise-equivalent and 11.4% faster; cache constants/geometries and vectorize ordered backtracks next.
 - [Standalone Residual Pursuit](session-012-rho-implementation-plan.md) — HIGH PRIORITY: standalone GPU-dense `Omega × sigma` detection and exhaustive lattice pursuit implemented; CPU synthetic validation passed and CUDA smoke `16489425` is pending.
 - [Identifiable Rho Localization](session-011-identifiable-rho-localization.md) — HIGH PRIORITY: rho solver passed synthetic recovery; vectorized full rho run `16482462` is running and reached chunk 339/1,958 with localization still dominating runtime.
 - [Whitened Dense GPU Pursuit](session-010-whitened-dense-pursuit.md) — HIGH PRIORITY: corrected local-ZCA run `16454853` and its plots completed; 382,799 events in 8.748s require scientific-quality review against the raw-coordinate baseline.
