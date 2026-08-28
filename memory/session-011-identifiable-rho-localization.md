@@ -35,7 +35,8 @@ All three use the same raw preprocessed coordinate (`whitening="none"`), Q8 inpu
 
 ## Next steps
 
-- [ ] Track full jobs `16478822`, `16478823`, `16478824`, and vectorized rho `16482462`; retain the original gated plot suites `16478841`--`16478843` only on successful completion.
+- [x] Resolve original full jobs `16478822`--`16478824` and gated plots `16478841`--`16478843`; all were cancelled, with completed chunk checkpoints retained.
+- [ ] Track vectorized rho full run `16482462` to completion or termination and record its final chunk/runtime/result.
 - [x] Replace whole-recording whitening setup with bounded sampled chunks before filtering/covariance estimation.
 - [ ] Compare unwhitened continuous and rho outputs against the raw-coordinate baseline before judging localization quality.
 
@@ -53,7 +54,16 @@ All three use the same raw preprocessed coordinate (`whitening="none"`), Q8 inpu
 - Historical 4-second / 8,192-fit superbatch benchmark (`bfe0565`, job `16257633`) achieved about 5.27x better steady-state throughput but was scientifically non-equivalent: only 67.38% of baseline events matched and continuous locations differed materially. Do not adopt large-chunk/superbatch settings as an output-compatible baseline optimization.
 - Do not submit additional full rho jobs based solely on batching. First implement and validate continuous-refinement synchronization removal or fusion against deterministic reference inputs and collect a short GPU utilization benchmark.
 
+## Resume update (2026-08-27, vectorized full run)
+
+- `16482462` is RUNNING. At the one-shot accounting check it had run for 1h34m; its log had reached chunk 339/1,958 (17.3%) with no stderr output.
+- Steady-state rounds take about 3.85--3.87 s, of which localization is about 3.50--3.52 s. The run is therefore still localization-bound despite vectorized discrete refinement.
+- Recent chunks accept about 34.3k--34.7k total fits across four rounds. Representative energy drops remain about 18--19%, 10--11%, 7--8%, and 5--6% across rounds 1--4.
+- `squeue` and `sstat` did not return within the one-shot checks, so live node placement and GPU-utilization counters were unavailable; `sacct` and the advancing output log independently confirm that the job is running.
+
 ## Links
+- [[session-013-rho-localization-optimization-plan]]
+- [[session-012-rho-implementation-plan]]
 - [[session-010-whitened-dense-pursuit]]
 - [[session-004-continuous-residual]]
 - [[session-006-plots]]

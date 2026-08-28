@@ -6,7 +6,9 @@ ANALYTIC_APPROACH
 - [User Profile](user_me.md) — working style and constraints, including outside-sandbox SLURM commands and memory-only session notes
 
 ## Sessions
-- [Identifiable Rho Localization](session-011-identifiable-rho-localization.md) — HIGH PRIORITY: rho solver passed synthetic recovery; an independent vectorized full rho run `16482462` is queued on `torch_pr_60_tandon_advanced`.
+- [Rho Localization Optimization Plan](session-013-rho-localization-optimization-plan.md) — HIGH PRIORITY: output-preserving plan to port Q12-style geometry caching, skip identity transforms, cache GPU constants, and vectorize first-improving rho line searches.
+- [Standalone Residual Pursuit](session-012-rho-implementation-plan.md) — HIGH PRIORITY: standalone GPU-dense `Omega × sigma` detection and exhaustive lattice pursuit implemented; CPU synthetic validation passed and CUDA smoke `16489425` is pending.
+- [Identifiable Rho Localization](session-011-identifiable-rho-localization.md) — HIGH PRIORITY: rho solver passed synthetic recovery; vectorized full rho run `16482462` is running and reached chunk 339/1,958 with localization still dominating runtime.
 - [Whitened Dense GPU Pursuit](session-010-whitened-dense-pursuit.md) — HIGH PRIORITY: corrected local-ZCA run `16454853` and its plots completed; 382,799 events in 8.748s require scientific-quality review against the raw-coordinate baseline.
 - [IBL-Style Pursuit](session-009-ibl-style-pursuit.md) — HIGH PRIORITY: delta-chi2 gate committed and its Q8 smoke completed; exhaustive first-fit extraction `16410844` plus 28 first-fit PNG panels distinguish temporal, spatial, alignment, and fragmentation errors before further pursuit changes
 - [Peak-Channel Codebook Initialization](session-008-peak-channel-codebook-init.md) — HIGH PRIORITY: fixed-threshold Q sweep `16358281` completed; whitening diagnostic `16360429` completed and showed whitening makes poor-capture error worse, so noise-weighted Delta chi^2 acceptance is next
