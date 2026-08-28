@@ -6,7 +6,7 @@ time basis is orthonormal and stored directly rather than as a module state dict
 each spike's footprint is reconstructed from its own chosen candidate rather than sliced
 out of a precomputed (B, C, K) tensor.
 
-Writes, per fit, into figures/<tag>/:
+Writes, per fit, into figures/lattice/<tag>/:
     components.png   the Q time courses, and where in the volume the fits actually land
     basis.png        the time basis one panel per component, sorted by usage, with the
                      aggregate and lattice scatters coloured by each spike's dominant one
@@ -33,9 +33,16 @@ from scipy.ndimage import gaussian_filter    # noqa: E402
 REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO))
 
-from spiketensor import data as D                                     # noqa: E402
+from spiketensor import data as D
+from spiketensor.example_spikes import N_EXAMPLE_SPIKES, example_spike_ids
+from spiketensor.viz_centroid_basis import (FULL_Y, ZOOM_Y,     # noqa: E402
+                                            save_aggregate, save_basis_error,
+                                            save_error_raster)
+from spiketensor.spike_error import (error_metric,              # noqa: E402
+                                     lattice_spike_sse, spike_energy)                                     # noqa: E402
+from spiketensor.drift import SUFFIX, correction                    # noqa: E402
 from spiketensor.volume import GridSpec, quantized_anchor_xyz         # noqa: E402
-from spiketensor.waveforms import load_batch                              # noqa: E402
+from spiketensor.fit import load_batch                              # noqa: E402
 from spiketensor.fit_lattice import Candidates, footprint, phi      # noqa: E402
 
 
@@ -51,6 +58,15 @@ def load(runs: Path, tag: str):
     if "mu_site" in z.files:
         S = int(z["S"])
         site, prof = k // S, k % S
+        if "site_sigma" in z.files:
+            # learned-basis fit: sigma is per ELEMENT and positions are centroid-anchored,
+            # so derive the anchor-relative per-spike mu from the explicit pos array
+            import spiketensor.data as _D
+            rec_ = _D.load(ck.get("dataset", "np1"))
+            rel = z["pos"].astype(np.float32).copy()
+            rel[:, :2] -= rec_.anchors[rec_.spike_channels][:, :2]
+            return (ck, k, z["v"], rel, z["site_sigma"][site], site, prof,
+                    z["mu_site"].astype(np.float32))
         return (ck, k, z["v"], z["mu_site"].astype(np.float32)[site],
                 z["prof_sigma"][prof], site, prof,
                 z["mu_site"].astype(np.float32))
@@ -244,10 +260,21 @@ def fig_usage(ck, K, V, site, out: Path, tag):
 def fig_spikes(ck, rec, off_all, K, V, mu, sig, musite, idx, out: Path, tag, lim=160.0):
     Y, off = load_batch(rec, idx, off_all, "cpu")
     a = ck["a"]
-    prf = ck.get("profiles") or [(ck.get("kernel", "monopole"), (s_,))
-                                 for s_ in ck["sigmas"]]
-    cand = Candidates(musite, [(p[0], tuple(p[1])) for p in prf], "cpu")
-    g = footprint(cand, off, torch.as_tensor(K[idx]))
+    if ck.get("site_sigma") is not None:
+        # learned basis: build the footprint directly from each spike's (mu, sigma)
+        from spiketensor.fit_lattice import KERNELS
+        ss = np.asarray(ck["site_sigma"])
+        m_ = torch.as_tensor(mu[idx]); sg = torch.as_tensor(ss[K[idx]])[:, None]
+        dxy2 = ((off[:, :, 0] - m_[:, None, 0]) ** 2
+                + (off[:, :, 1] - m_[:, None, 1]) ** 2)
+        dz2 = (m_[:, None, 2] ** 2).expand_as(dxy2)
+        g = KERNELS[ck.get("kernel", "monopole")](dxy2, dz2, (sg,))
+        g = g / g.norm(dim=1, keepdim=True).clamp_min(1e-12)
+    else:
+        prf = ck.get("profiles") or [(ck.get("kernel", "monopole"), (s_,))
+                                     for s_ in ck["sigmas"]]
+        cand = Candidates(musite, [(p[0], tuple(p[1])) for p in prf], "cpu")
+        g = footprint(cand, off, torch.as_tensor(K[idx]))
     Yh = g[:, :, None] * (torch.as_tensor(V[idx]) @ a)[:, None, :]
     Y, Yh, offs = Y.numpy(), Yh.numpy(), off.numpy()
     n = len(idx); amp = 16.0 / max(1e-6, np.abs(Y).max())
@@ -294,12 +321,15 @@ def fig_spikes(ck, rec, off_all, K, V, mu, sig, musite, idx, out: Path, tag, lim
     ax[0][0].set_ylabel("measured (red) vs model (green)", fontsize=8)
     ax[3][0].set_ylabel("v", fontsize=8)
     fig.suptitle(f"example spikes — {tag}   ·   ONE (site, scale) per spike (blue ○); "
-                 f"cyan + anchor, white ▫ contacts", fontsize=11)
+                 f"cyan + anchor, white ▫ contacts\n"
+                 f"canonical MULTI-SOURCE spike ids {list(map(int, idx))} — identical for "
+                 f"every model in the browser, so these panels are directly comparable",
+                 fontsize=11)
     fig.savefig(out / "spikes.png", dpi=125, bbox_inches="tight"); plt.close(fig)
 
 
 def fig_localize(ck, rec, K, mu, out: Path, tag, n=60000, seed=3):
-    g = GridSpec(**torch.load(REPO / "runs/gridspec.pt",
+    g = GridSpec(**torch.load(REPO / "zncc/runs/pretrain_np1/model.pt",
                               map_location="cpu", weights_only=False)["grid"])
     qa = quantized_anchor_xyz(rec.anchors, g)
     rng = np.random.default_rng(seed)
@@ -327,80 +357,46 @@ def fig_localize(ck, rec, K, mu, out: Path, tag, n=60000, seed=3):
 
 
 def fig_aggregate(ck, rec, K, V, mu, sig, out: Path, tag, t0=1200.0, res=2.0,
-                  ktrunc=60.0, zoom=(400., 900.), gamma=.45):
-    sec = np.floor(rec.spike_times / rec.fs)
-    idx = np.flatnonzero((sec >= t0) & (sec < t0 + 1))
-    anc = rec.anchors[rec.spike_channels[idx]][:, :2]
-    pos = anc + mu[idx][:, :2]
-    amp = np.linalg.norm(V[idx], axis=1)
-    x_lo, x_hi, y_lo, y_hi = -70., 130., 0., 3840.
-    nx, ny = int((x_hi - x_lo) / res), int((y_hi - y_lo) / res)
+                  ktrunc=60.0, zoom=(400., 900.), gamma=.45, sfx="", dy=None):
+    """Delegates to the ONE shared aggregate panel so every model matches.
 
-    def scatter(px, py, w):
-        A = np.zeros((ny, nx))
-        ix = np.floor((px - x_lo) / res).astype(int)
-        iy = np.floor((py - y_lo) / res).astype(int)
-        ok = (ix >= 0) & (ix < nx) & (iy >= 0) & (iy < ny)
-        np.add.at(A, (iy[ok], ix[ok]), w[ok]); return A
-
-    nk = int(ktrunc / res); gg = np.arange(-nk, nk + 1) * res
-    KX, KY = np.meshgrid(gg, gg, indexing="xy")
-    soft = np.zeros((ny, nx))
-    for i in range(len(idx)):
-        m, s_ = mu[idx[i]], sig[idx[i]]
-        d2 = KX ** 2 + KY ** 2 + m[2] ** 2
-        ker = ((s_ / np.sqrt(d2 + s_ ** 2)) if ck["kernel"] == "monopole"
-               else np.exp(-d2 / (2 * s_ ** 2))) * (np.sqrt(KX ** 2 + KY ** 2) <= ktrunc)
-        cx = int((pos[i, 0] - x_lo) / res); cy = int((pos[i, 1] - y_lo) / res)
-        x0, x1 = max(0, cx - nk), min(nx, cx + nk + 1)
-        y0, y1 = max(0, cy - nk), min(ny, cy + nk + 1)
-        if x1 <= x0 or y1 <= y0:
-            continue
-        soft[y0:y1, x0:x1] += amp[i] * ker[y0 - cy + nk:y1 - cy + nk,
-                                           x0 - cx + nk:x1 - cx + nk]
-    hard = gaussian_filter(scatter(pos[:, 0], pos[:, 1], amp), 4.0 / res)
-    mono = gaussian_filter(scatter(rec.mp_xyz[idx, 0], rec.mp_xyz[idx, 1],
-                                   np.ptp(np.asarray(rec.waveforms[idx]),
-                                          axis=2).max(1)), 4.0 / res)
-    panels = [("lattice SOFT  Σ_s ‖v‖ g_{k(s)}", soft),
-              ("lattice HARD (4 µm blur)", hard),
-              ("MONOPOLE reference (4 µm blur)", mono)]
-    for name, ylim, h in (("aggregate_1s", (y_lo, y_hi), 13.),
-                          ("aggregate_1s_zoom", zoom, 7.)):
-        fig, ax = plt.subplots(1, 3, figsize=(3.1 * 3 + 1.2, h + 1.),
-                              constrained_layout=True)
-        for j, (ttl, img) in enumerate(panels):
-            s = img[img > 0]
-            v = np.percentile(s, 99.7) if s.size else 1.
-            ax[j].imshow(img, origin="lower", extent=[x_lo, x_hi, y_lo, y_hi],
-                         cmap="magma", aspect="equal",
-                         norm=PowerNorm(gamma, vmin=0, vmax=v), interpolation="nearest")
-            sel = ((ylim[0] <= rec.channel_locations[:, 1])
-                   & (rec.channel_locations[:, 1] <= ylim[1]))
-            ax[j].scatter(rec.channel_locations[sel, 0], rec.channel_locations[sel, 1],
-                          s=6, marker="s", c="none", edgecolors="w", linewidths=.4,
-                          alpha=.6)
-            ax[j].set_ylim(*ylim); ax[j].set_xlim(x_lo, x_hi)
-            ax[j].set_title(ttl, fontsize=9); ax[j].set_xlabel("x (µm)", fontsize=8)
-            ax[j].tick_params(labelsize=7)
-        ax[0].set_ylabel("depth y (µm)", fontsize=9)
-        fig.suptitle(f"aggregate, t = {t0:.0f}–{t0+1:.0f} s — {tag}\n{len(idx)} spikes · "
-                     f"true aspect · kernels truncated at {ktrunc:.0f} µm", fontsize=10)
-        fig.savefig(out / f"{name}.png", dpi=125, bbox_inches="tight"); plt.close(fig)
+    The old three-panel figure (kernel-stamp SOFT / blurred HARD / monopole reference)
+    is gone: the SOFT view had no multi-source counterpart and the monopole reference is
+    its own browser row, so neither could belong to a matched set. `ktrunc` and `sig`
+    are kept in the signature only so existing callers still work.
+    """
+    sec = np.floor(rec.spike_times / rec.fs).astype(np.int64)
+    anc = rec.anchors[rec.spike_channels][:, :2]
+    x = anc[:, 0] + mu[:, 0]
+    y = anc[:, 1] + mu[:, 1]
+    if dy is not None:
+        y = y - dy
+    amp = np.linalg.norm(V, axis=1)
+    note = "one (site, scale) per spike"
+    for name, ylim in ((f"aggregate_1s{sfx}", (0., 3840.)),
+                       (f"aggregate_1s_zoom{sfx}", zoom)):
+        save_aggregate(out / f"{name}.png", x, y, amp, sec, rec, ylim, tag, note,
+                       t0=int(t0), res=res, gamma=gamma)
 
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--runs", type=Path, default=REPO / "runs")
-    ap.add_argument("--figs", type=Path, default=REPO / "figures")
+    ap.add_argument("--runs", type=Path, default=REPO / "zncc/runs/lattice")
+    ap.add_argument("--figs", type=Path, default=REPO / "zncc/figures/lattice")
     ap.add_argument("--only", default="")
-    ap.add_argument("--n_spikes", type=int, default=6)
+    ap.add_argument("--n_spikes", type=int, default=N_EXAMPLE_SPIKES)
+    ap.add_argument("--error-metric", dest="error_metric",
+                    choices=["relative", "absolute"], default="relative",
+                    help="relative = unexplained energy fraction (default; absolute "
+                         "MSE mostly redraws the amplitude map)")
+    ap.add_argument("--correct", choices=["none", "soft", "hard", "real-rigid", "real-nonrigid"], default="none",
+                    help="render the aggregates from DREDge-corrected depths")
     a = ap.parse_args()
 
     rec = D.load("np1")
     off_all = rec.channel_offsets().astype(np.float32)
-    rng = np.random.default_rng(11)
-    sidx = np.sort(rng.choice(rec.n_spikes, a.n_spikes, replace=False))
+    # the SAME spikes for every model in the browser -- see example_spikes.py
+    sidx = example_spike_ids(rec.n_spikes, a.n_spikes)
     for f in sorted(a.runs.glob("summary_*.json")):
         tag = f.stem[len("summary_"):]
         if a.only and a.only not in tag:
@@ -412,6 +408,34 @@ def main():
         fig_basis(ck, rec, V, site, musite, out, tag)
         fig_spikes(ck, rec, off_all, K, V, mu, sig, musite, sidx, out, tag)
         fig_localize(ck, rec, K, mu, out, tag)
+        sfx = SUFFIX[a.correct or "none"]
+        dy = None
+        if sfx:
+            y_spk = rec.anchors[rec.spike_channels][:, 1] + mu[:, 1]
+            try:
+                dy = correction(a.figs, tag, a.correct, rec.spike_times, rec.fs,
+                                y=y_spk)
+            except FileNotFoundError as e:
+                print(f"  skip {tag}: {e}", flush=True)
+                continue
+        # per-spike reconstruction error: is the model worse in some places?
+        err = error_metric(lattice_spike_sse(a.runs, tag, rec),
+                           spike_energy(rec), a.error_metric)
+        t_spk = rec.spike_times / rec.fs
+        y_all = rec.anchors[rec.spike_channels][:, 1] + mu[:, 1]
+        y_err = y_all - dy if dy is not None else y_all
+        note = ("uncorrected" if not sfx
+                else f"{a.correct} DREDge-corrected")
+        for name, ylim in ((f"depth_time_mse_full{sfx}", FULL_Y),
+                           (f"depth_time_mse_zoom{sfx}", ZOOM_Y)):
+            save_error_raster(out / f"{name}.png", t_spk, y_err, err, ylim, tag,
+                              note, metric=a.error_metric)
+        if sfx:      # corrected run: only depth-dependent panels are redone
+            fig_aggregate(ck, rec, K, V, mu, sig, out, tag, sfx=sfx, dy=dy)
+            print(f"  {tag}: aggregates+error{sfx}", flush=True); continue
+        anc = rec.anchors[rec.spike_channels][:, :2]
+        save_basis_error(out / "basis_error.png", anc[:, 0] + mu[:, 0], y_all, err,
+                         tag, metric=a.error_metric)
         fig_aggregate(ck, rec, K, V, mu, sig, out, tag)
         print(f"  {tag}: panels written", flush=True)
 

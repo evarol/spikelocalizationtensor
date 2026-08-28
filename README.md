@@ -1,404 +1,199 @@
 # spikelocalizationtensor
 
-Single-source tensor factorization of extracellular spike waveforms, with an interactive
-browser for comparing spatial encodings.
+**One model for extracellular spike waveforms**, with an interactive browser and a 3-D
+raster viewer for inspecting what it learned.
 
-Each spike is reconstructed as **one spatial footprint times one time course**. The spatial
-part is a single discrete choice out of a large fixed codebook; the temporal part is a
-low-dimensional basis shared across every spike in the recording. There is no neural
-network and no gradient descent — both blocks of the fit have closed forms, so the
-objective decreases monotonically and converges in about three iterations.
-
-![approach](docs/panels/schematic.png)
-
-**Reading the figure.** Top row, left to right: a measured spike on its 10 nearest contacts
-is approximated as one **spatial footprint** `g_s` — a single site chosen from 2.6 M
-candidates, shown as the profile it selected with the site circled — times one **time
-course** `v_sᵀa`. Multiplying them gives the reconstruction, overlaid on the measurement at
-right.
-
-The two factors are the two scientific readouts, and that is the point of the model. The
-spatial factor gives every spike a **centroid** (`anchor + μ_k`), which is a localization —
-bottom left, at true aspect, coloured by which basis component each spike leans on. The
-temporal factor gives every spike a coefficient vector **`v_s`** over a basis shared by all
-2.5 M spikes — bottom middle for the example spike, bottom right for the basis itself — which
-is a waveform-type signature.
-
-So one factorization answers *where the neuron is* and *what kind of waveform it has*, from
-the same fit, with no clustering step in between.
-
-Regenerate with `python3 docs/make_schematic.py --runs <runs> --tag lat64_monopole_Q8`.
-
----
-
-## The model
-
-Spike `s` contributes a waveform `Y[s]` of shape `(C=10 channels, T=90 samples)`, taken on
-the 10 contacts nearest its peak channel and DC-removed per channel. Writing `r[s,c]` for
-the position of contact `c` relative to that spike's anchor:
+Every spike is reconstructed as a small number of **point sources**. Each source picks a
+place, a shape, a lag and a loudness:
 
 ```
-Y[s, c, t]  ≈  g_s(c) · (v_s ᵀ a)[t]
+Ŷ_s  =  Σ_{r=1..R}  a_r · g(· ; μ_{n_r}, σ_{n_r}) · (S_{τ_r} ψ_{q_r})ᵀ
+          └ loudness   └ spatial atom (learned)      └ shape atom, shifted
 ```
 
-**Spatial — `g_s`.** A codebook of candidates pairs a lattice site `μ_k` with a radial
-profile `φ` at scale `σ_j`:
+![method](docs/panels/schematic.png)
 
-```
-g_s(c) = φ( ‖ r[s,c] − μ_k ‖ ; σ_j )          peak-normalised to 1
-```
+The spatial atoms are analytic kernels with **learned** centres and scales; the shape
+codebook `{ψ_q}` is shared by every spike in the recording. Nothing here is an encoder
+network: assignment is matching pursuit with exact coefficient refits, and the codebook
+update is a closed-form block.
 
-The lattice fills a 300 µm cube around the anchor: uniform in x and y over ±150 µm,
-**geometric in z** over [1, 300] µm, with `K = n³` sites for `n ∈ {8, 16, 32, 64}`. A
-symmetric z range would be pure mirror degeneracy — both kernels depend on `|z|` — and a
-uniform one spends half its samples past 150 µm where footprints are nearly flat.
+## One model, many configurations
 
-Each spike selects **exactly one** `(site, profile)` pair. No soft mixture, no relaxation.
-At the largest setting that is 262,144 sites × 60 profiles = **15.7 M candidates per
-spike**.
+Earlier versions of this project shipped a separate module per model. They are all the
+same model at different settings, so there is now one implementation
+(`spiketensor.unified`) and one config:
 
-**Temporal — `a`.** An orthonormal basis of shape `(Q, T)` learned from the data, with a
-free per-spike coefficient vector `v_s ∈ ℝ^Q`. Every spike gets its own time course, but
-constrained to a subspace shared by all of them.
+| knob | meaning |
+|---|---|
+| `R` | sources per spike (`R=1` is the classic rank-one template) |
+| `M` | shape-codebook size |
+| `kernel` | `monopole`, `gauss`, `exp`, `lorentz`, … any analytic decay |
+| `max_shift` | lag range; `0` makes shape selection shift-**variant** |
+| `shape` | `free` (coefficient vector) or `onehot` (one atom per source) |
+| `nonneg` | non-negative amplitudes (one-hot only) |
+| `P` | learned action-potential prototypes constraining the codebook; `0` = none |
+| `cone_deg` | how far an atom may deviate from its prototype |
+| `orthonormal` | keep the codebook row-orthonormal |
 
-**Objective** — plain reconstruction, no regulariser. One-of-N is the only constraint:
+```python
+from spiketensor.unified import Config, fit
 
-```
-minimise   Σ_s ‖ Y[s] − g_s (v_sᵀ a)ᵀ ‖²_F   /   (N · C · T · var)
-```
-
-over `a`, the per-spike selections, and the coefficients `v_s`.
-
-### Available spatial profiles
-
-All are functions of the lateral and axial squared offsets separately, so anisotropic forms
-share one signature with radial ones.
-
-| name | φ(d; σ) | note |
-|---|---|---|
-| `monopole` | σ/√(d²+σ²) | the classic point-source falloff |
-| `gauss` | exp(−d²/2σ²) | flattest peak |
-| `exp` | exp(−d/σ) | **cusped** at the source, not smooth |
-| `lorentz` | σ²/(d²+σ²) | monopole squared |
-| `power` | (σ/√(d²+σ²))^p | monopole raised to a free exponent |
-| `student` | (1+d²/σ²)^(−ν) | heavy-tailed |
-| `yukawa` | monopole · exp(−d/λ) | screened Coulomb |
-| `dog` | difference of Gaussians | **non-monotonic** — the only profile that can represent a surround |
-| `gauss_aniso`, `mono_aniso` | independent lateral / axial scales | breaks the spherical assumption |
-
-Families can be **mixed into one dictionary**, in which case a spike chooses its shape as
-well as its position and scale.
-
----
-
-## The solver
-
-Eliminating `v_s` analytically gives an identity that drives everything. With
-`u_s = g_sᵀ Y[s] / ‖g_s‖²`:
-
-```
-‖Y − g wᵀ‖²  =  ‖Y‖² − ‖g‖²‖u‖²  +  ‖g‖² ‖w − u‖²
+fit(Config(R=1, shape="free",   orthonormal=True), out)             # rank-one template
+fit(Config(R=4, shape="free",   orthonormal=True), out)             # multi-source, free shapes
+fit(Config(R=4, shape="onehot", max_shift=0,  orthonormal=True), out)  # one-hot, no lags
+fit(Config(R=4, shape="onehot", max_shift=10, orthonormal=True), out)  # + shift invariance
+fit(Config(R=8, shape="onehot", max_shift=10, P=2, cone_deg=35), out)  # + prototype prior
 ```
 
-Both blocks then have exact solutions, so the loss is monotone non-increasing:
+**Orthonormality and the prototype prior are mutually exclusive, and the code refuses to
+pretend otherwise.** `M` unit vectors cannot all sit inside small cones about `P ≪ M`
+prototypes *and* be mutually orthogonal; requesting both raises rather than silently
+dropping one. That tension is the reason the prior exists: orthogonality is exactly what
+drives a large free codebook into Fourier-like atoms, because the spike-shaped directions
+get used first and only oscillatory ones remain.
 
-**1. Assign** — with `a` fixed and orthonormal, the best candidate is the maximiser of a
-**Rayleigh quotient** in the normalised footprint `ĝ`:
+## What the configuration buys
 
-```
-score_s(n) = ĝ_nᵀ (M_s M_sᵀ) ĝ_n ,     M_s = Y[s] aᵀ   (C × Q)
-residual_s = ‖Y[s]‖² − max_n score_s(n)
-```
+Sweeping `R` and `M` over both kernels on 2,475,738 spikes (variance explained, %):
 
-**2. Refit** — with the selections fixed, minimising over `a` *and every* `v_s` jointly is
-weighted PCA: `a` is the top-Q eigenvector set of `S = Σ_s u_s u_sᵀ`, a 90×90 scatter.
+![sweep](docs/panels/ve_heatmaps.png)
 
-### Why 15.7 M candidates per spike is affordable
+The axes **interact**: more sources are worth +23.0 points at `M=64` but only +6.6 at
+`M=4`, and more shapes are worth +16.6 points at `R=8` but **+0.2** at `R=1`. One source
+cannot use a rich vocabulary; many sources cannot use a poor one. The spatial kernel
+barely matters — the Gaussian equals or beats the monopole in 18 of 20 cells, and the
+learned prototypes come out essentially identical either way.
 
-`M_s M_sᵀ` is **10×10 regardless of Q**, so the time-basis size drops out of the inner loop
-entirely. Vectorising that symmetric matrix to its 55 unique entries turns the whole argmax
-into a single GEMM — `Φ (|N| × 55) @ p_s (55 × B)` — at **110 FLOPs per spike-candidate**,
-independent of Q. Candidates are built per channel-geometry (only ~106 distinct 10-contact
-configurations exist on the probe) and chunked, so the expanded table is never
-materialised.
+The `P=2` prototypes are learned, not templates, and they **sharpen with capacity** (mean
+depolarizing FWHM 2.08 ms at `R=1` → 0.29 ms at `R=8`), so a prototype read off a
+low-capacity fit is an under-modelling artifact rather than a cell type:
 
----
+![prototypes](docs/panels/prototypes.png)
 
-## Baseline localizers
+**A caveat worth stating loudly:** reconstruction quality does **not** predict
+localization quality. Across 40 fits, the correlation between variance explained and
+drift-recovery accuracy is **−0.045**. Select models for drift work on the downstream
+task, never on fit error.
 
-`spiketensor/baselines.py` provides two reference localizers that fit nothing. They bracket
-the useful range and every learned model is reported against them.
+## Panels
 
-**Monopole** — the standard analytic point-source fit the field already uses. This is the
-target to beat.
+### Spike reconstruction
 
-**Anchor-only** — a *collapse control*. It discards the waveform entirely and places every
-spike at its own peak channel, so it carries no positional information beyond which contact
-fired.
-
-The control exists because the pairwise-ZNCC score `C` rewards temporal self-similarity of
-the localization image, and an image collapsed onto the channel lattice is maximally
-self-similar. On this recording:
-
-| localizer | C_hard | drift recovery (GT r) |
-|---|---|---|
-| anchor-only (collapse control) | **0.795** | +0.465 |
-| monopole | 0.504 | **+0.865** |
-
-The control scores **higher C than every fitted model measured** while recovering the
-imposed drift far worse. **Read C as distance below the control, never as an absolute
-quality score.**
-
----
-
-## Repository layout
-
-```
-spiketensor/
-  fit_lattice.py        the model and the exact alternating solver
-  baselines.py          monopole and anchor-only reference localizers
-  data.py               recording access, probe geometry, ground-truth motion
-  waveforms.py          DC-removed batch loader + reconstruction reference bounds
-  probe_geometry.py     nearest-contact neighbourhood lookup
-  volume.py             voxel GridSpec and the Gaussian volume smoother
-  zncc.py               shift-max ZNCC over depth lags
-  dredge.py             rigid motion solve from the pairwise shift matrix
-  gtscore.py            detrended correlation against the imposed drift
-
-  dc_batch.py           D/C matrices + DREDge solve for every fit, in batch
-  dc_movie.py           the shared six-panel D/C figure, and the I_t movies
-  dc_table.py           the C table and the nMSE-vs-C figure
-  convergence.py        per-fit loss trajectories and the family overlay
-  viz_lattice.py        codebook, usage, example-spike and aggregate panels
-  viz_centroid_basis.py centroid / time-basis panels, rasters and movies
-  browser.py            builds the interactive HTML visualizer
-docs/panels/            the screenshots used in this README
-```
-
-### Quickstart
-
-```bash
-pip install -r requirements.txt
-
-# fit one model: 32³ sites × 10 monopole scales, Q=32 time basis
-python -m spiketensor.fit_lattice --n 32 --Q 32 --kernel monopole
-
-# a mixed dictionary — the spike picks its profile shape too
-python -m spiketensor.fit_lattice --n 64 --Q 32 \
-    --kernel monopole,gauss,exp,lorentz,student,dog
-
-# reference localizers, measured through the identical pipeline
-python -m spiketensor.dc_batch --controls --panels
-
-# measurement + figures for everything fitted so far
-python -m spiketensor.dc_batch --panels          # D and C, DREDge motion
-python -m spiketensor.viz_lattice                # codebook / spike / aggregate panels
-python -m spiketensor.viz_centroid_basis         # centroid, raster and movie panels
-python -m spiketensor.convergence                # loss trajectories
-python -m spiketensor.dc_table                   # C table + nMSE-vs-C figure
-python -m spiketensor.browser                    # figures/index.html
-```
-
-Fits land in `runs/`, figures in `figures/`. Neither is tracked.
-
----
-
-## The interactive visualizer
-
-`python -m spiketensor.browser` writes a single self-contained `figures/index.html`: every
-fit and every reference localizer as one row, filterable by hyperparameter, sortable by any
-metric, with a click-through scatter and the full panel set inline.
-
-![browser overview](docs/panels/browser_overview.png)
-
-The top strip filters by model family, kernel, lattice size `n`, `K = n³`, `Q`, scale count
-and penalty. The scatter axes are selectable on both x and y — reconstruction nMSE, mean
-`C_soft` / `C_hard`, drift recovery, lattice size, fraction of sources off-grid — and dots
-can be coloured by any factor. Clicking a dot selects its row; clicking a row opens its
-panels. The **contact sheet** control renders any single panel across every filtered fit at
-once, which is how a hyperparameter axis is best read.
-
-![browser with a fit selected](docs/panels/browser_selected.png)
-
----
-
-## The panels
-
-Every row carries all of the following. Screenshots below are from **`lat64_monopole_Q8`**
-— a 64³ lattice (262,144 sites) with 10 monopole scales and a Q=8 time basis, fitted to
-2.48 M spikes. It reaches nMSE 0.1402 and recovers the imposed drift at r = +0.857, close to
-the monopole baseline's +0.865, using 38% of its sites and 263,418 of its 2.6 M candidates.
-
-### `dc` — pairwise ZNCC and the recovered motion
-
-![dc](docs/panels/dc.png)
-
-The core drift measurement. `D(t,t')` is the depth shift that best aligns the localization
-images of two one-second bins; `C(t,t')` is the correlation at that shift. Top row uses a
-softmax over lags, bottom row the argmax — the latter is what DREDge actually reads. The
-right column shows the rigid motion solved from each `D`, overlaid on the imposed
-ground-truth drift, with correlation, gain and peak-to-peak.
-
-### `convergence` — the loss trajectory
-
-![convergence](docs/panels/convergence.png)
-
-Reconstruction nMSE against iteration and wall-clock, with the free rank-1 oracle (0.1029)
-and per-slot mean (0.3189) drawn as reference lines and the final full-data value marked.
-Because both blocks of the solver are exact, these curves are monotone by construction.
-
-### `spikes` — reconstruction quality, spike by spike
+Measured (red) against the model (green) on the 10 nearest contacts, drawn at their real
+probe positions. Every model in the browser shows the **same** spikes, so panels are
+directly comparable across configurations.
 
 ![spikes](docs/panels/spikes.png)
 
-For a fixed set of example spikes: the measured waveform (red) against the model (green
-dashed) laid out on the true contact geometry; per-channel measured-vs-model peak-to-peak
-bars; the chosen spatial profile rendered on an x-y slice at the selected depth, with the
-site marked and the contacts overlaid; and the coefficient vector `v_s`.
+Per-source decomposition — observed, each active source term, total, residual:
 
-### `aggregate_1s` / `aggregate_1s_zoom` — one second of localizations
+![decomposition](docs/panels/spike_decomposition.png)
 
-![aggregate](docs/panels/aggregate_1s_zoom.png)
+### Depth × time rasters, with and without drift correction
 
-One second of spikes rendered three ways at true aspect: the model's own soft kernels
-summed, the same as hard points at 4 µm blur, and the monopole reference for comparison.
-Full-probe and 400–900 µm zoom variants.
+Coloured by **amplitude** (uncorrected, then canonical nonrigid `dredge_ap`):
 
-### `localize` — implied position against the monopole
+![density](docs/panels/depth_time_density_zoom.png)
+![density corrected](docs/panels/depth_time_density_zoom_drn.png)
 
-![localize](docs/panels/localize.png)
+Coloured by **shape**, using a local-neighbourhood PCA that maximises colour diversity —
+the codebook coefficients are projected to RGB by a 3-component PCA refitted inside
+overlapping 200 µm depth blocks and rank-equalised, so nearby units get separable colours
+instead of the washed-out middle of the colour cube:
 
-The chosen site's `(x, y, z)` against the monopole fit, per axis, with correlation, **slope**
-and spread. Slope is the honest statistic: a shrunk estimate stays correlated while barely
-moving, so correlation reads as success where slope reads as failure.
+![shape](docs/panels/depth_time_basis_zoom.png)
+![shape corrected](docs/panels/depth_time_basis_zoom_drn.png)
 
-### `components` — what the codebook learned
+Straightening the sawtooth in the corrected panels is the actual test of the pipeline;
+whatever remains is motion the model could not see.
 
-![components](docs/panels/components.png)
+### Others
 
-The time basis, where in the volume the sites actually get used, depth usage across the
-geometric z lattice, and profile usage with bars coloured by kernel family. For a
-single-family dictionary like this one the last panel reads as a scale histogram; for a
-mixed dictionary it is how the composition is revealed, with the per-family share in the
-title.
+| | |
+|---|---|
+| ![basis](docs/panels/basis.png) | ![cloud](docs/panels/source_cloud.png) |
+| shape codebook and where it is used | every active source, by contribution |
+| ![mse](docs/panels/depth_time_mse_zoom.png) | ![err](docs/panels/basis_error.png) |
+| where the model fits badly | is the error biased by location? |
+| ![dredge](docs/panels/dredge_real.png) | ![embed](docs/panels/embed_umap.png) |
+| canonical `dredge_ap` vs imposed motion | shape space (UMAP of the coefficients) |
+| ![centroid](docs/panels/centroid_basis_zoom.png) | ![agg](docs/panels/aggregate_1s_zoom.png) |
+| every source centroid, shape-coloured | one second, amplitude-weighted |
+| ![components](docs/panels/components.png) | ![usage](docs/panels/usage.png) |
+| the spatial dictionary and its usage | codebook occupancy |
+| ![localize](docs/panels/localize.png) | ![conv](docs/panels/convergence.png) |
+| localization readouts | objective per outer iteration |
+| ![it](docs/panels/It_zoom_frame.png) | ![cb](docs/panels/centroid_basis_movie_frame.png) |
+| frame from the 1 s/frame `I_t` movie | frame from the centroid movie |
+| ![convall](docs/panels/convergence_all.png) | ![sel](docs/panels/browser_selected.png) |
+| convergence across fits | one panel across every fit, in the browser |
 
-### `basis` — the time basis, one panel per component
+## Motion correction
 
-![basis](docs/panels/basis.png)
+This package reports **one** motion estimate: canonical SpikeInterface `dredge_ap`, rigid
+and nonrigid. The project's earlier internal soft/hard ZNCC solve is not distributed —
+three estimates that disagreed made every panel ambiguous about which was being shown.
+Corrected panels carry the suffix `_drr` (rigid) or `_drn` (nonrigid).
 
-Overlaying the basis becomes unreadable as Q grows, so each component gets its own panel,
-sorted by usage and coloured by rank; the grid adapts to Q. Since `v_s` is free, no spike
-"uses" one component outright;
-the hard label is `argmax_q |v[s,q]|`. The bar chart reports both how many spikes each
-component dominates and its share of `Σv²`, because the two can disagree. The scatters
-below colour every spike by its dominant component.
+> **Pitfall, fixed here, worth knowing if you reimplement it:** `dredge_ap` log1p-bins
+> amplitudes and thresholds window weights at 0.2. Model amplitudes (‖v‖ median ≈ 0.2)
+> sit in the linear regime, so the histogram silently vanishes and rigid correlation
+> collapses from +0.93 to +0.25 while nonrigid looks fine. `dredge_real.py` rescales
+> amplitudes to median 100 before the call.
 
-### `usage` — how concentrated the codebook is
+## The browser
 
-![usage](docs/panels/usage.png)
+```bash
+python -m spiketensor.browser --runs runs/ --figs figures/
+```
 
-Cumulative share of spikes against sites and candidates ranked by usage, with the count
-needed to cover half the spikes marked, plus the model-amplitude distribution.
+Builds a single filterable, sortable page over every fit: reconstruction, codebook,
+localization, rasters, aggregates, error panels, DREDge traces, and 1 s/frame movies —
+each in uncorrected, rigid and nonrigid variants.
 
-### `centroid_basis_full` / `centroid_basis_zoom` — centroids coloured by time basis
+![browser](docs/panels/browser_overview.png)
 
-![centroid basis](docs/panels/centroid_basis_zoom.png)
+## 3-D raster viewer
 
-Every spike's global centroid — `anchor_xy + μ_site[:2]` — jittered ±1.5 µm and coloured by
-its dominant time-basis component, in the same aspect as the aggregate views. The palette is
-a deterministic shuffle indexed by the original `q`, so hue is stable across fits.
+```bash
+python -m spiketensor.atom_viewer --state runs/multipole_<tag>.npz --tag <tag>
+```
 
-### `depth_time_density_full` / `depth_time_density_zoom` — the drift raster
+Writes one **self-contained HTML** file (plotly inlined, all points embedded — no server,
+no network). It shows the source cloud in *time × lateral x × depth*, which the 2-D
+rasters collapse:
 
-![depth time density](docs/panels/depth_time_density_zoom.png)
+- rotate / zoom, with independent aspect sliders per axis (a 1958 s × 200 µm × 3840 µm
+  volume is unreadable at 1:1:1)
+- camera presets, including an orthographic **depth × time** view that reproduces the 2-D
+  raster exactly
+- switch between shape atoms, or merge them all
+- colour by atom, by amplitude, or by **per-spike reconstruction error**, with min/max
+  error filters
+- **click anywhere** to inspect the nearest spike: measured vs model on the 10 fitted
+  channels, or across **all 384** with the model *extrapolated* to channels it never saw
 
-Depth against recording time, amplitude-weighted, in the same magma/power-law convention as
-the aggregate views. This is the clearest view of the imposed motion in the whole repo:
-flat unit bands for the first ~600 s, then the sawtooth engages and individual units track
-it.
+The last point is possible because the spatial footprint is analytic, so it evaluates
+anywhere on the probe. The extrapolation divides by the same 10-channel norm the fit used,
+and units are tied by a single scalar fitted on the fit channels only — leaving the other
+374 channels an honest out-of-sample test.
 
-### `depth_time_basis_full` / `depth_time_basis_zoom` — the same raster, coloured by basis
+Static per-atom rasters (`spiketensor.atom_rasters`) and 3-D scatters
+(`spiketensor.atom_scatter3d`) are also available.
 
-![depth time basis](docs/panels/depth_time_basis_zoom.png)
+Full derivation, solver and evaluation details: [docs/MODEL.md](docs/MODEL.md).
 
-Identical geometry, but every centroid is a jittered dot coloured by its dominant time-basis
-component rather than by density — so temporal structure and waveform-shape structure can be
-read off the same axes.
+## Install
 
-### `It_zoom` / `It_full` — the images the ZNCC actually sees
+```bash
+pip install -r requirements.txt
+```
 
-![I_t frame](docs/panels/It_zoom_frame.png)
+Needs a recording in the loader's format (`spiketensor.data`): detected spikes, denoised
+10-channel waveforms, probe geometry. `dredge_real` additionally needs SpikeInterface.
 
-A movie at one second per frame of the smoothed localization volume `I_t`, on a fixed colour
-scale with contacts overlaid and the imposed motion drawn as a line. These are the exact
-inputs to the `D`/`C` computation, so drift that DREDge cannot recover is usually visible
-here as an image that does not move.
+## Not included
 
-### `centroid_basis_movie_zoom` / `centroid_basis_movie_full` — the centroid scatter over time
-
-![centroid movie frame](docs/panels/centroid_basis_movie_frame.png)
-
-The same one-second binning as the centroid panels, animated, with colour still keyed to the
-dominant time basis.
-
----
-
-## Cross-fit summary figures
-
-`dc_table.py` and `convergence.py` also write two figures that span the whole sweep rather
-than a single fit.
-
-**`figures/mse_vs_C.png`** — reconstruction against the held-out ZNCC score, with the
-collapse control drawn on every panel. None of these fits optimised `C`, so it is a genuine
-held-out measurement; the third panel is where `C` is shown not to track drift recovery.
-
-![mse vs C](docs/panels/mse_vs_C.png)
-
-**`figures/convergence_all.png`** — every fit's loss trajectory overlaid, raw and
-time-normalised.
-
-![convergence overlay](docs/panels/convergence_all.png)
-
----
-
-## Summary of findings
-
-Across 37 fits on a 2.48 M-spike Neuropixels recording with imposed sawtooth drift:
-
-**Reconstruction.** Best nMSE **0.1080**, against a free rank-1 oracle of 0.1029 — the error
-when every spike gets its own unconstrained rank-1 factorization with no spatial structure
-at all. So constraining the fit to a *single point source with one spherical scale, chosen
-from a fixed codebook*, costs about 5%.
-
-**The time basis dominates.** `Q = 8 → 32` moves nMSE by ~0.030. Growing the lattice 32³ →
-64³ — eight times the sites — moves it by 0.0005, and scale resolution saturates above ~10
-levels. Only profile *shape* and `Q` matter.
-
-**Profile shape acts through the peak, not the tail.** Single-kernel ordering runs
-`exp` (cusped, 0.1089) → `lorentz` (0.1092) → `monopole` (0.1099) → `gauss` (0.1107), which
-is sharpest-peak to flattest-peak, not fastest-tail to slowest. Given a free exponent, the
-model puts 47% of spikes on the sharpest available.
-
-**Mixing shapes helps only when they genuinely differ.** Three monotone kernels together
-improve on the best single one by 0.0002. Adding the non-monotonic difference-of-Gaussians
-takes the top spot, with DoG the most-used family (38.6%) and Gaussian essentially never
-chosen (0.2%).
-
-**Reconstruction and localization disagree.** Two coarse-scale Gaussian fits — among the
-*worst* reconstructors — give the best drift recovery (+0.906 and +0.904), beating the
-monopole baseline's +0.865. Across all encodings the correlation between nMSE and drift
-recovery is +0.87, falling to +0.52 without those two. The cleanest version needs no
-correlation: three monopole variants with *identical* nMSE (0.1099) span GT r +0.858 to
-+0.874, so reconstruction cannot rank them and localization can.
-
-**A caveat carried in the table.** Fits whose sources reach past the measurement grid are
-re-measured with positions clipped in, flagged, and drawn hollow. Raw and clipped drift
-recovery agree to ≤0.003, but their `C` values are the clipped ones.
-
----
-
-## Data
-
-The fitting code expects a preprocessed recording exposing spike times, peak channels,
-10-contact neighbourhood waveforms, contact geometry and a monopole localization for
-comparison (see `spiketensor/data.py`). The recording itself is not distributed here.
+The heteroscedastic noise-model study is not ready to distribute and is not part of this
+package.

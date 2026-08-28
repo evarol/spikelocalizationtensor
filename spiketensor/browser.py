@@ -16,8 +16,9 @@ Metrics come from summary_*.json (fit-side) joined to frontier.json (localizatio
 computed once by frontier.py against the monopole on a common 60k spike sample).
 
 Usage:
-    python -m spiketensor.browser            # rebuilds figures/index.html
-    open figures/index.html
+    python3 zncc/tensor/frontier.py          # writes frontier.json
+    python3 zncc/tensor/browser.py
+    open zncc/figures/tensor/index.html
 """
 from __future__ import annotations
 
@@ -33,8 +34,6 @@ sys.path.insert(0, str(REPO))
 PANELS = [("It_zoom", "It_zoom.mp4",
            "movie: localizations binned at 1 s, zoomed to 400–900 µm"),
           ("It_full", "It_full.mp4", "movie: the same over the full probe"),
-          ("dc", "dc.png",
-           "D and C matrices, soft and hard, with the DREDge motion solved from each"),
           ("convergence", "convergence.png",
            "loss convergence: reconstruction nMSE vs step and wall-clock"),
           ("spikes", "spikes.png", "example spikes: reconstruction, per-spike heat map, π"),
@@ -46,30 +45,104 @@ PANELS = [("It_zoom", "It_zoom.mp4",
            "the time basis per component, sorted by usage, with space coloured by which "
            "component each spike leans on"),
           ("centroid_basis_zoom", "centroid_basis_zoom.png",
-           "all spike centroids, 400–900 µm zoom; jittered and coloured by dominant "
-           "time basis"),
+           "all spike centroids, 400–900 µm zoom; jittered, coloured by RGB of the "
+           "3-component PCA of v_s (shape-preserving colours)"),
           ("centroid_basis_full", "centroid_basis_full.png",
-           "all spike centroids over the full probe; jittered and coloured by dominant "
-           "time basis"),
+           "all spike centroids over the full probe; jittered, coloured by RGB of the "
+           "3-component PCA of v_s"),
           ("centroid_basis_movie_zoom", "centroid_basis_movie_zoom.mp4",
-           "one-second centroid scatter movie, 400–900 µm zoom; colour is dominant "
-           "time basis"),
+           "one-second centroid scatter movie, 400–900 µm zoom; colour = RGB of the "
+           "v_s PCA"),
           ("centroid_basis_movie_full", "centroid_basis_movie_full.mp4",
-           "one-second centroid scatter movie over the full probe; colour is dominant "
-           "time basis"),
+           "one-second centroid scatter movie over the full probe; colour = RGB of "
+           "the v_s PCA"),
           ("depth_time_density_zoom", "depth_time_density_zoom.png",
            "depth × time raster, 400–900 µm; amplitude-weighted magma density"),
           ("depth_time_density_full", "depth_time_density_full.png",
            "depth × time raster over the full probe; amplitude-weighted magma density"),
           ("depth_time_basis_zoom", "depth_time_basis_zoom.png",
-           "depth × time centroid scatter, 400–900 µm; jittered and coloured by "
-           "dominant time basis"),
+           "depth × time centroid scatter, 400–900 µm; jittered, coloured by RGB of "
+           "the v_s PCA"),
           ("depth_time_basis_full", "depth_time_basis_full.png",
-           "depth × time centroid scatter over the full probe; jittered and coloured "
-           "by dominant time basis"),
+           "depth × time centroid scatter over the full probe; jittered, coloured by "
+           "RGB of the v_s PCA"),
+          ("depth_time_mse_zoom", "depth_time_mse_zoom.png",
+           "depth × time raster, 400–900 µm; colour = mean per-spike reconstruction "
+           "error (unexplained energy fraction) — shows where the model fits badly"),
+          ("depth_time_mse_full", "depth_time_mse_full.png",
+           "depth × time raster over the full probe; colour = mean per-spike "
+           "reconstruction error"),
+          ("basis_error", "basis_error.png",
+           "spatial basis locations coloured by mean reconstruction error, plus error "
+           "vs depth — is the error biased by WHERE the spike is localized?"),
+          ("embed_umap", "embed_umap.png",
+           "UMAP of the per-spike coefficients v_s, coloured by centroid x / y / z and "
+           "by the 3-PC PCA RGB shape colour"),
+          ("embed_pca", "embed_pca.png",
+           "PCA of v_s — the linear, parameter-free baseline for the same view"),
+          ("embed_tsne", "embed_tsne.png", "t-SNE of v_s, if it was computed"),
+          ("dredge_real", "dredge_real.png",
+           "canonical spikeinterface dredge_ap on this fit's localizations: rigid + "
+           "nonrigid traces vs imposed motion, and corrected depth rasters"),
           ("usage", "usage.png", "π support and concentration")]
 
+# Optional model-family panels.  Ordinary lattice rows simply leave these blank;
+# the overall-extension registry below supplies them for multipole and noise-model
+# examples without copying or rewriting either study's source artifacts.
+PANELS += [
+    ("spike_decomposition", "spike_decomposition.png",
+     "multipole: observed waveform, each active source term, total, and residual"),
+    ("source_cloud", "source_cloud.png",
+     "multipole: every active source, colored by its fractional contribution q"),
+    ("multipole_diagnostics", "multipole_diagnostics.png",
+     "multipole: support, contribution, separation, conditioning, and source sensitivity"),
+    ("readout_sensitivity", "readout_sensitivity.png",
+     "multipole: all-source, dominant-source, and contribution-weighted centroid views"),
+    ("spatial_temporal_shapes", "spatial_temporal_shapes.png",
+     "multipole: observed/reconstructed spike, sub-source waveforms, and learned spatial footprint in x-y and z-y"),
+]
+
+# Every depth-dependent panel again, rendered after subtracting the fit's OWN DREDge
+# motion. These are the test of the pipeline: an uncorrected raster shows the imposed
+# sawtooth, a correctly corrected one is flat, and whatever is left is motion the model
+# could not see. Soft uses the softmax-over-lags solve, hard the argmax one.
+_CORRECTED = [("centroid_basis_zoom", "centroids, 400–900 µm zoom"),
+              ("centroid_basis_full", "centroids, full probe"),
+              ("depth_time_density_zoom", "depth × time density, zoom"),
+              ("depth_time_density_full", "depth × time density, full probe"),
+              ("depth_time_basis_zoom", "depth × time by basis, zoom"),
+              ("depth_time_basis_full", "depth × time by basis, full probe"),
+              ("depth_time_mse_zoom", "depth × time reconstruction error, zoom"),
+              ("depth_time_mse_full", "depth × time reconstruction error, full probe"),
+              ("aggregate_1s_zoom", "1 s aggregate, zoom"),
+              ("aggregate_1s", "1 s aggregate, full probe")]
+_CORRECTED_MOV = [("It_zoom", "I_t movie, zoom"), ("It_full", "I_t movie, full probe"),
+                  ("centroid_basis_movie_zoom", "centroid movie, zoom"),
+                  ("centroid_basis_movie_full", "centroid movie, full probe")]
+# Simplified per user request: of all DREDge results only the CANONICAL (real) ones
+# are shown. The internal soft/hard corrected panels and the internal dc figure remain
+# on disk but are no longer registered.
+for _w, _lab in (("drr", "REAL DREDge rigid"), ("drn", "REAL DREDge nonrigid")):
+    PANELS += [(f"{k}_{_w}", f"{k}_{_w}.png", f"{_lab} DREDge-corrected — {d}")
+               for k, d in _CORRECTED]
+    PANELS += [(f"{k}_{_w}", f"{k}_{_w}.mp4", f"{_lab} DREDge-corrected — {d}")
+               for k, d in _CORRECTED_MOV]
+
 REF = {"free_rank1": 0.1029, "per_slot_mean": 0.3189, "mono_spread_y": 15.4}
+
+
+def _real_cols(d: Path):
+    """Canonical-DREDge scores for a row, if dredge_real has been run on it."""
+    f = d / "dredge_real.npz"
+    if not f.exists():
+        return {"real_r": None, "real_gain": None, "real_r_nr": None}
+    import numpy as _np
+    z = _np.load(f)
+    # Keep enough precision for deterministic ranking: the two leading Gaussian
+    # fits both display as 0.935 but differ in the fourth decimal place.
+    return {"real_r": round(float(z["gt_r_rigid"]), 6),
+            "real_gain": round(float(z["gt_gain_rigid"]), 6),
+            "real_r_nr": round(float(z["gt_r_nonrigid_best"]), 6)}
 
 
 def collect(runs: Path, figs: Path):
@@ -77,7 +150,8 @@ def collect(runs: Path, figs: Path):
     f = figs / "frontier.json"
     if f.exists():
         front = {r["tag"]: r for r in json.loads(f.read_text())}
-    # mean pairwise ZNCC of each fit's own I_t, from dc_batch.py. Held out: no fit here
+    # mean pairwise ZNCC of each fit's own I_t (not computed by this package).
+    # Held out: no fit here
     # ever optimised C, so it can be plotted against nMSE without the two being coupled
     # by construction the way they were in the 140 trained ZNCC runs.
     # from C_table.json, NOT dc_all.jsonl: that file carries the same exclusion policy the
@@ -109,13 +183,23 @@ def collect(runs: Path, figs: Path):
         mp_ = re.search(r"_p([0-9.]+)(?:_|$)", tag)
         msp = re.search(r"_sp([0-9.]+)x([0-9.]+)", tag)
         msc = re.search(r"_sc([0-9.]+)-([0-9.]+)", tag)
-        mlat = re.match(r"lat(\d+)_(\w+?)_Q(\d+)$", tag)
+        mlat = (re.match(r"(lat|lm)(\d+)_(\w+?)_Q(\d+)", tag)
+                or re.match(r"(lrn)(\d+)_(\w+?)_M(\d+)", tag))
         if mlat:
             rows.append({
-                "tag": tag, "model": "lattice",
+                "tag": tag,
+                "model": ("basis-learned" if s.get("learned_basis")
+                          else "lattice-learned" if s.get("learn_mu") else "lattice"),
                 "kernel": ar.get("kernel", "monopole"),
-                "n": int(mlat.group(1)), "K": s.get("K"), "S": s.get("S"),
-                "KS": s.get("KS"), "Q": ar.get("Q"), "P": s.get("K"),
+                "learn_mu": bool(s.get("learn_mu")),
+                "mu_shift": (round(s["mu_shift_med"], 2)
+                             if s.get("mu_shift_med") else None),
+                "n": int(mlat.group(2)), "K": s.get("K"), "S": s.get("S"),
+                # learned-basis fits record the shape-basis size as top-level "Q" and as args["M"];
+                # lattice fits put it in args["Q"]. Reading only args["Q"] left the column
+                # empty for every lrn* row.
+                "KS": s.get("KS"),
+                "Q": ar.get("Q", s.get("Q", ar.get("M"))), "P": s.get("K"),
                 "nz": None, "sigma": None,
                 "sites_used": s.get("sites_used"), "cands_used": s.get("cands_used"),
                 "penalty": "none (1-of-K)", "level": 0.0,
@@ -135,7 +219,8 @@ def collect(runs: Path, figs: Path):
                 "limited": bool(dr.get("limited")),
                 "scale_lo": 1.0, "scale_hi": 512.0,
                 "panels": {k: (f"{tag}/{fn}" if (d / fn).exists() else None)
-                           for k, fn, _ in PANELS}})
+                           for k, fn, _ in PANELS},
+                **_real_cols(d)})
             continue
         rows.append({
             "tag": tag,
@@ -178,6 +263,7 @@ def collect(runs: Path, figs: Path):
             "scale_hi": float(msc.group(2)) if msc else None,
             "panels": {k: (f"{tag}/{fn}" if (d / fn).exists() else None)
                        for k, fn, _ in PANELS},
+            **_real_cols(d),
         })
     for tag, c in ctl.items():
         d = figs / tag
@@ -197,7 +283,61 @@ def collect(runs: Path, figs: Path):
             "outside": round(c.get("outside_frac", 0) * 100, 2), "limited": False,
             "scale_lo": None, "scale_hi": None,
             "panels": {k: (f"{tag}/{fn}" if (d / fn).exists() else None)
-                       for k, fn, _ in PANELS}})
+                       for k, fn, _ in PANELS},
+            **_real_cols(d)})
+    extension_file = figs / "overall_extensions.json"
+    if extension_file.exists():
+        payload = json.loads(extension_file.read_text())
+        for extension in payload.get("rows", []):
+            row = dict(extension)
+            root = figs / row.pop("panel_root")
+            explicit = row.pop("panel_files", {})
+            row.setdefault("panels", {})
+            row["panels"] = {
+                key: (str((root / explicit.get(key, filename)).relative_to(figs))
+                      if (root / explicit.get(key, filename)).exists() else None)
+                for key, filename, _ in PANELS
+            }
+            # Keep the browser schema stable for sorting/filtering even when a
+            # family does not define a lattice-specific quantity.
+            defaults = {
+                "kernel": "monopole", "n": None, "K": None, "S": None,
+                "KS": None, "Q": None, "P": None, "nz": None,
+                "sigma": None, "sites_used": None, "cands_used": None,
+                "penalty": "—", "level": None, "nmse": None,
+                "pos_used": None, "pos_top1": None, "slope_x": None,
+                "slope_y": None, "r_x": None, "r_y": None,
+                "spread_y": None, "resid_y": None, "resid_x": None,
+                "pexp": None, "span_x": None, "span_y": None,
+                "C_soft": None, "C_hard": None, "gt_r_hard": None,
+                "gt_gain_hard": None, "D_amp_hard": None,
+                "lattice_frac": None, "outside": None, "limited": False,
+                "scale_lo": None, "scale_hi": None, "learn_mu": True,
+                "mu_shift": None, "real_r": None, "real_gain": None,
+                "real_r_nr": None,
+                "study": None, "study_label": None, "experiment_id": None,
+                "seed": None, "eval_nmse": None, "loo_nmse": None,
+                "support_mean": None, "multi_source_fraction": None,
+                "condition_p95": None, "exact_support_agreement": None,
+                "location_r": None, "barycenter_r": None,
+                "displacement_p95": None, "boundary_fraction": None,
+                "held_profile_sensitivity": None, "baseline_loo": None,
+                "scientific_status": None, "promotion_status": None,
+                "promotion_passed": None, "failure_reason": None,
+                "failed_gates": [], "completion_status": None,
+                "experiment_role": None, "source_cap": None,
+                "spatial_dictionary": None, "spatial_profile": None,
+                "temporal_sharing": None, "metric_scope": None,
+                "misfit": None, "example_flags": [],
+                "representative_event_ids": [], "panel_scope": None,
+                "unavailable_panels": {}, "state_href": None,
+                "bounded_state_href": None, "manifest_href": None,
+                "full_recording_status": None,
+                "model_href": None, "metrics_href": None,
+                "gates_href": None, "report_href": None,
+                "provenance_href": None, "audit_href": None,
+            }
+            rows.append({**defaults, **row})
     return rows
 
 
@@ -243,6 +383,18 @@ tr:hover td{background:rgba(127,127,127,.10);cursor:pointer}
 .sheet figure{margin:0}
 .sheet figcaption{font-size:11px;color:var(--dim);padding:3px 0}
 .count{color:var(--dim);font-size:12px;padding:6px 18px}
+.explore-note{margin-top:8px;padding:8px 10px;border-left:3px solid #845ef7;
+              background:rgba(132,94,247,.09);max-width:1150px}
+.detail{margin:14px 0;padding:13px 14px;border:1px solid var(--line);border-radius:8px;
+        background:var(--card);max-width:1180px}
+.detail h2{margin:0 0 7px;color:var(--fg);font-size:15px}.detail p{margin:6px 0}
+.detail-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:7px 15px}
+.detail-grid div{color:var(--dim)}.detail-grid b{display:block;color:var(--fg);font-size:12px}
+.badge{display:inline-block;border-radius:999px;padding:3px 8px;font-weight:700;font-size:11px;
+       border:1px solid var(--line);margin-right:6px}
+.badge.ref{background:rgba(47,158,68,.18);color:#69db7c}.badge.no{background:rgba(201,42,42,.16);color:#ff8787}
+.badge.diag{background:rgba(132,94,247,.18);color:#b197fc}
+.links a{color:var(--acc);margin-right:12px}.unavailable{color:var(--dim);font-size:11px}
 </style>
 <header>
   <h1>tensor factorization browser</h1>
@@ -266,11 +418,24 @@ tr:hover td{background:rgba(127,127,127,.10);cursor:pointer}
     z=160 µm; the third coordinate is source depth for monopole kernels but kernel WIDTH
     for gauss, so they are not one axis). The 8 fits above 5% are re-measured with z
     clipped into the grid — colour by <i>measurement-limited</i> to see them.
+    <br><b>Primary ranking:</b> <b>real GT r</b>, the rigid canonical
+    SpikeInterface <code>dredge_ap</code> trace against imposed motion. The table and
+    scatter open on this metric; internal GT r remains visible for comparison.
     <br><b>New centroid / basis panels:</b> each learned dot is the spike anchor plus its
     chosen localization-codebook site, coloured by argmax<sub>q</sub>|v<sub>s,q</sub>|.
     A deterministic display-only ±1.5 µm jitter separates spikes that share a site; the
     depth × time views additionally use ±0.18 s jitter. Reference methods have no learned
     time basis and are therefore shown in one labelled neutral colour.
+    <br><b>Additional model examples:</b> registered multipole rows display every active
+    source.  A source contributes fractional count <i>q</i> (and amplitude × <i>q</i>) so
+    the source weights from each parent spike sum to one.  The heteroscedastic H2 row is
+    an explicitly labelled diagnostic example, not a promotion decision.
+    <div class="explore-note"><b>Exploratory spatial models stay visible even when they fail.</b>
+    Generalized-g and co-located scale-mixture rows are registered only after frozen
+    full-recording inference and the same standard C/D, DREDge, raster, reconstruction,
+    embedding, and correction audit used for the multipole rows. Bounded <b>eval nMSE</b>,
+    <b>LOO nMSE</b>, and saved promotion gates remain visible separately. Browser inclusion
+    is comparative evaluation, not promotion.</div>
   </div>
 </header>
 <div class="controls" id="controls"></div>
@@ -283,36 +448,53 @@ tr:hover td{background:rgba(127,127,127,.10);cursor:pointer}
 <div id="tip"></div>
 <script>
 const ROWS = __DATA__, PANELS = __PANELS__, REF = __REF__;
-const FILTERS = [["model","model"],["kernel","kernel"],["n","lattice n"],["P","K/P"],["Q","Q"],
+const FILTERS = [["study","study"],["scientific_status","status"],["misfit","failure mode"],
+                 ["model","model"],["learn_mu","learned µ"],["kernel","kernel"],
+                 ["n","lattice n"],["P","K/P"],["Q","Q"],
                  ["nz","n scales"],["sigma","σ"],["span_x","span x"],
                  ["span_y","span y"],["scale_hi","scale hi"],["pexp","p"],
                  ["penalty","penalty"],["level","level"]];
-const COLS = [["tag","fit"],["model","model"],["kernel","kernel"],["n","n"],
-  ["K","K=n³"],["cands_used","cands used"],["sites_used","sites used"],["P","K/P"],
+const COLS = [["tag","fit"],["study","study"],["scientific_status","status"],
+  ["model","model"],["kernel","kernel"],["n","n"],
+  ["K","K=n³"],["cands_used","cands used"],["sites_used","sites used"],
+  ["mu_shift","µ shift"],["P","K/P"],
   ["Q","Q"],["nz","n sc"],["sigma","σ"],["span_x","span x"],["span_y","span y"],
-  ["scale_hi","sc hi"],["penalty","penalty"],["level","level"],["nmse","nMSE"],["pos_used","pos used"],
+  ["scale_hi","sc hi"],["penalty","penalty"],["level","level"],["nmse","full nMSE"],
+  ["eval_nmse","eval nMSE"],["loo_nmse","LOO nMSE"],["location_r","loc r"],
+  ["displacement_p95","disp P95"],["multi_source_fraction","multi"],
+  ["condition_p95","cond P95"],["exact_support_agreement","exact"],["pos_used","pos used"],
   ["pos_top1","pos top1"],["slope_x","slope x"],["slope_y","slope y"],
   ["r_y","r y"],["spread_y","spread y"],["resid_y","resid y"],
   ["C_soft","C soft"],["C_hard","C hard"],["gt_r_hard","GT r"],
+  ["real_r","real GT r"],["real_gain","real gain"],["real_r_nr","real GT r nr"],
   ["D_amp_hard","D amp"],["lattice_frac","lattice"],["outside","outside %"]];
-const AX = [["nmse","reconstruction nMSE"],["n","lattice side n"],
+const AX = [["nmse","full-recording reconstruction nMSE"],
+            ["eval_nmse","bounded evaluation nMSE"],["loo_nmse","strict channel-LOO nMSE"],
+            ["displacement_p95","dominant-source displacement P95 (µm)"],
+            ["condition_p95","support Gram condition P95"],["n","lattice side n"],
             ["K","lattice sites K = n³"],["Q","time-basis size Q"],["C_hard","mean C_hard (held out)"],
             ["C_soft","mean C_soft (held out)"],["sigma","kernel width σ (µm)"],
             ["Q","number of shared shapes Q"],["span_x","lattice span in x (µm)"],
             ["outside","% of sources outside the grid"],
+            ["mu_shift","median µ displacement (µm)"],
             ["pos_top1","π mass in top position"],
             ["pos_used","positions used"],["level","penalty level"]];
-const AY = [["C_hard","mean C_hard — pairwise ZNCC of I_t, held out"],
+const AY = [["location_r","dominant localization correlation with retained reference"],
+            ["barycenter_r","barycentric localization correlation with retained reference"],
+            ["exact_support_agreement","screened/exact support agreement"],
+            ["C_hard","mean C_hard — pairwise ZNCC of I_t, held out"],
             ["C_soft","mean C_soft — pairwise ZNCC of I_t, held out"],
             ["gt_r_hard","DREDge motion vs the imposed drift"],
+            ["real_r","canonical dredge_ap rigid vs imposed drift"],
             ["slope_y","slope of implied y vs monopole"],
             ["slope_x","slope of implied x vs monopole"],
             ["spread_y","std of implied y (µm)"],
             ["resid_y","residual scatter about the monopole (µm)"],
             ["nmse","reconstruction nMSE"]];
-const state={f:{},sort:"C_hard",desc:true,sel:null,sheet:null,
-             sx:"nmse",sy:"C_hard",cby:"model"};
-const CBY=[["kernel","kernel"],["n","lattice n"],["Q","Q"],["model","model"],
+const state={f:{},sort:"real_r",desc:true,sel:null,sheet:null,preset:null,
+             sx:"nmse",sy:"real_r",cby:"model"};
+const CBY=[["study","study"],["scientific_status","status"],["kernel","kernel"],
+           ["n","lattice n"],["Q","Q"],["model","model"],
            ["P","K/P"],["nz","nz"],
            ["sigma","σ"],["penalty","penalty"],["level","level"],
            ["limited","measurement-limited"],[null,"none"]];
@@ -320,12 +502,24 @@ const VIR=[[68,1,84],[62,74,137],[38,130,142],[53,183,121],[180,222,44],[253,231
 function ramp(t){t=Math.max(0,Math.min(1,t));const x=t*(VIR.length-1),i=Math.floor(x),
   f=x-i,a=VIR[i],b=VIR[Math.min(i+1,VIR.length-1)];
   return `rgb(${a.map((v,k)=>Math.round(v+f*(b[k]-v))).join(",")})`;}
-const CAT={true:"#f59f00",false:"#4c8dff",
+const CAT={true:"#f59f00",false:"#4c8dff",generalized_spatial:"#15aabf",
+           colocated_scale_mixture:"#845ef7","retained reference":"#2f9e44",
+           "exploratory—not promoted":"#c92a2a","negative control":"#e8590c",
+           "identifiability diagnostic":"#845ef7","matched control—not promoted":"#f59f00",
            monopole:"#4c8dff",gauss:"#e8590c",entropy:"#2f9e44",L1:"#845ef7",
            none:"#888",hard:"#c92a2a","hard-fixedvol":"#f59f00",
            grid:"#2f9e44",cp:"#845ef7",
            "hard 1-of-K":"#c92a2a"};
-const num=v=>(v===null||v===undefined)?"—":(Number.isInteger(v)?v:(+v).toFixed(3));
+const num=v=>{if(v===null||v===undefined)return "—";const x=+v;
+  if(Number.isInteger(x)&&Math.abs(x)<1e4)return String(x);
+  if(Math.abs(x)>=1e4||(Math.abs(x)>0&&Math.abs(x)<1e-3))return x.toExponential(2);
+  return x.toFixed(3);};
+const PRESETS=[["exploratory","all exploratory"],["reconstruction","largest recon gain"],
+  ["localization","largest localization change"],["stable","stable + gain"],
+  ["source_count","changed source count"],["pair_replaced","pair → broad composite"],
+  ["search","support disagreement"],["conditioning","high conditioning"],
+  ["boundary","boundary saturation"],["sensitivity","held sensitivity"],
+  ["c5","C5 held-channel failure"]];
 // panels are a mix of stills and 1 s/frame movies; pick the right element per extension
 const media=src=>src.endsWith(".mp4")
   ? `<video src="${src}" controls loop muted playsinline preload="metadata"></video>`
@@ -341,6 +535,10 @@ const uniq=k=>[...new Set(ROWS.map(r=>r[k]).filter(v=>v!==null&&v!==undefined))]
               .sort((a,b)=>typeof a==="number"?a-b:String(a).localeCompare(b));
 function ctrl(){
   const c=document.getElementById("controls");c.innerHTML="";
+  const pg=document.createElement("div");pg.className="grp";pg.innerHTML="<b>misfit presets</b>";
+  const pmk=(v,t)=>{const b=document.createElement("button");b.textContent=t;
+    b.className=state.preset===v?"on":"";b.onclick=()=>{state.preset=state.preset===v?null:v;draw();};pg.append(b);};
+  pmk(null,"off");PRESETS.forEach(([v,t])=>pmk(v,t));c.append(pg);
   for(const [k,lab] of FILTERS){
     const g=document.createElement("div");g.className="grp";g.innerHTML=`<b>${lab}</b>`;
     const mk=(v,t)=>{const b=document.createElement("button");b.textContent=t;
@@ -362,7 +560,37 @@ function ctrl(){
     b.className=state.sheet===v?"on":"";b.onclick=()=>{state.sheet=v;draw();};sh.append(b);};
   mk2(null,"off");PANELS.forEach(p=>mk2(p[0],p[0]));c.append(sh);
 }
-function match(r){return FILTERS.every(([k])=>state.f[k]===undefined||r[k]===state.f[k]);}
+function presetMatch(r){const f=r.example_flags||[];switch(state.preset){
+  case "exploratory":return !!r.study;case "reconstruction":return f.includes("largest reconstruction improvement");
+  case "localization":return f.includes("largest localization displacement");
+  case "stable":return f.includes("stable localization with improved reconstruction");
+  case "source_count":return f.includes("changed source count");
+  case "pair_replaced":return f.includes("pair replaced by one broad composite");
+  case "search":return f.includes("exact/screened support disagreement");
+  case "conditioning":return f.includes("high conditioning");
+  case "boundary":return f.includes("profile-boundary saturation");
+  case "sensitivity":return f.includes("high held-channel sensitivity");
+  case "c5":return f.includes("catastrophic C5 held-channel failure");default:return true;}}
+function match(r){return presetMatch(r)&&FILTERS.every(([k])=>state.f[k]===undefined||r[k]===state.f[k]);}
+function detail(r){if(!r.study)return "";const cls=r.scientific_status==="retained reference"?"ref":
+  (r.scientific_status||"").includes("exploratory")|| (r.scientific_status||"").includes("not promoted")?"no":"diag";
+  const link=(href,label)=>href?`<a href="${href}" target="_blank">${label}</a>`:"";
+  const unavailable=Object.entries(r.unavailable_panels||{}).filter(([,v])=>v)
+    .map(([k,v])=>`<li><b>${k.replaceAll("_"," ")}</b>: ${v}</li>`).join("");
+  return `<section class="detail"><h2>${r.tag}</h2>
+    <p><span class="badge ${cls}">${r.scientific_status}</span><span class="badge">${r.completion_status}</span></p>
+    <div class="detail-grid"><div>experiment<b>${r.experiment_id} · seed ${r.seed}</b></div>
+    <div>role<b>${r.experiment_role}</b></div><div>dictionary<b>${r.spatial_dictionary}</b></div>
+    <div>profile<b>${r.spatial_profile}</b></div><div>source cap<b>R ≤ ${r.source_cap}</b></div>
+    <div>temporal model<b>${r.temporal_sharing}</b></div><div>metric scope<b>${r.metric_scope}</b></div>
+    <div>primary misfit<b>${r.misfit}</b></div></div>
+    <p><b>Failed gates:</b> ${r.failure_reason}</p><p><b>Full-recording status:</b> ${r.full_recording_status}</p>
+    <p><b>Panel scope:</b> ${r.panel_scope}</p>
+    <p class="links">${link(r.state_href,"saved state")}${link(r.model_href,"model")}
+    ${link(r.bounded_state_href,"bounded state")}${link(r.manifest_href,"full manifest")}
+    ${link(r.metrics_href,"metrics")}${link(r.gates_href,"gates")}${link(r.report_href,"report")}
+    ${link(r.provenance_href,"provenance")}${link(r.audit_href,"audit")}</p>
+    ${unavailable?`<details class="unavailable"><summary>Unavailable standard panels and why</summary><ul>${unavailable}</ul></details>`:""}</section>`;}
 function scatter(keep){
   const el=document.getElementById("scatter");
   const rs=ROWS.filter(r=>r[state.sx]!==null&&r[state.sy]!==null);
@@ -452,11 +680,17 @@ function draw(){
       "</div>";
   } else if(state.sel){
     const r=ROWS.find(x=>x.tag===state.sel);
-    p.innerHTML=`<h2>${r.tag}</h2>`+PANELS.map(([k,fn,lab])=>r.panels[k]?
+    p.innerHTML=detail(r)+`<h2>${r.tag}</h2>`+PANELS.map(([k,fn,lab])=>r.panels[k]?
       `<h2>${lab} — <a href="${r.panels[k]}" target="_blank">${fn}</a></h2>
        ${media(r.panels[k])}`:"").join("");
   } else p.innerHTML="<h2>click a row or a dot to open its panels</h2>";
 }
+const params=new URLSearchParams(location.search);
+for(const k of ["study","scientific_status","misfit"])if(params.get(k))state.f[k]=params.get(k);
+if(params.get("preset"))state.preset=params.get("preset");
+if(params.get("sx")&&AX.some(x=>x[0]===params.get("sx")))state.sx=params.get("sx");
+if(params.get("sy")&&AY.some(x=>x[0]===params.get("sy")))state.sy=params.get("sy");
+if(params.get("select"))state.sel=params.get("select");
 draw();
 </script>
 """
@@ -464,8 +698,8 @@ draw();
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--runs", type=Path, default=REPO / "runs")
-    ap.add_argument("--figs", type=Path, default=REPO / "figures")
+    ap.add_argument("--runs", type=Path, default=REPO / "zncc/runs/tensor")
+    ap.add_argument("--figs", type=Path, default=REPO / "zncc/figures/tensor")
     ap.add_argument("--index-name", default="index.html",
                     help="write a copy under this filename without replacing index.html")
     a = ap.parse_args()

@@ -4,7 +4,7 @@ Everything shown is measured, not illustrative: the waveforms are real spikes, t
 footprint is the profile the model actually selected for that spike, the time course is the
 fitted one, and the downstream panels are the real localization and coefficient spaces.
 
-    python3 docs/make_schematic.py --runs <runs> --tag lat64_monopole_Q8
+    python3 docs/make_schematic.py --runs <runs> --tag d_gauss_iso6
 """
 from __future__ import annotations
 
@@ -28,6 +28,16 @@ from spiketensor.fit_lattice import KERNELS, Candidates, footprint   # noqa: E40
 from spiketensor.waveforms import load_batch          # noqa: E402
 
 C_SPACE, C_TIME, C_IN, C_OUT = "#4c8dff", "#e8590c", "#c92a2a", "#2f9e44"
+HEADLINE_TAG = "d_gauss_iso6"
+HEADLINE_NOTE = "d_gauss_iso6 · canonical rigid r = +0.935 · gain = 0.550"
+
+
+def compact_count(value: int) -> str:
+    if value >= 1_000_000:
+        return f"{value / 1_000_000:.1f} M"
+    if value >= 1_000:
+        return f"{value / 1_000:.0f} k"
+    return str(value)
 
 
 def load_fit(runs: Path, tag: str):
@@ -158,7 +168,8 @@ def schematic_A(ctx, out: Path):
     m = musite[site[idx[i]]]
     B.plot(m[0], m[1], "o", mfc="none", mec=C_SPACE, ms=15, mew=2.4)
     B.set_xticks([]); B.set_yticks([])
-    B.set_title("SPATIAL  $g_s$\none site chosen from 2.6 M", fontsize=10.5, color=C_SPACE)
+    B.set_title(f"SPATIAL  $g_s$\none site chosen from "
+                f"{compact_count(int(ck['KS']))}", fontsize=10.5, color=C_SPACE)
 
     Cx = fig.add_subplot(gs[0, 2])
     Cx.plot(np.arange(len(w[i])) / 30.0, w[i], color=C_TIME, lw=2.0)
@@ -409,7 +420,8 @@ def schematic_D(ctx, out: Path):
     m = musite[site[idx[i]]]
     B.plot(m[0], m[1], "o", mfc="none", mec=C_SPACE, ms=15, mew=2.4)
     B.set_xticks([]); B.set_yticks([])
-    B.set_title("SPATIAL  $g_s$\none site chosen from 2.6 M", fontsize=10.5, color=C_SPACE)
+    B.set_title(f"SPATIAL  $g_s$\none site chosen from "
+                f"{compact_count(int(ck['KS']))}", fontsize=10.5, color=C_SPACE)
     Cx = fig.add_subplot(gs[0, 2])
     Cx.plot(np.arange(len(w[i])) / 30.0, w[i], color=C_TIME, lw=2.1)
     Cx.axhline(0, color="0.75", lw=.6); Cx.set_yticks([]); Cx.set_xlabel("ms", fontsize=9)
@@ -488,7 +500,7 @@ def schematic_Av(ctx, out: Path, ylim=(400., 900.), xlim=(-100., 150.), n_pts=26
 
     fig = plt.figure(figsize=(16.4, 11.2)); fig.patch.set_facecolor("white")
     gs = fig.add_gridspec(2, 12, height_ratios=[.92, 1.35],
-                          left=.04, right=.98, top=.885, bottom=.055,
+                          left=.04, right=.98, top=.82 if tag_note else .885, bottom=.055,
                           wspace=1.05, hspace=.30)
 
     A = fig.add_subplot(gs[0, 0:2]); sc = draw_waves(A, Y[i], off[i], C_IN, 1.3)
@@ -503,8 +515,8 @@ def schematic_Av(ctx, out: Path, ylim=(400., 900.), xlim=(-100., 150.), n_pts=26
     m = musite[site[idx[i]]]
     B.plot(m[0], m[1], "o", mfc="none", mec=C_SPACE, ms=16, mew=2.5)
     B.set_xticks([]); B.set_yticks([])
-    B.set_title("SPATIAL  $g_s$\none site from 2.6 M candidates", fontsize=11,
-                color=C_SPACE)
+    B.set_title(f"SPATIAL  $g_s$\none site from {compact_count(int(ck['KS']))} candidates",
+                fontsize=11, color=C_SPACE)
     Cx = fig.add_subplot(gs[0, 4:6])
     Cx.plot(np.arange(len(w[i])) / 30.0, w[i], color=C_TIME, lw=2.2)
     Cx.axhline(0, color="0.75", lw=.6); Cx.set_yticks([]); Cx.set_xlabel("ms", fontsize=9)
@@ -565,7 +577,8 @@ def schematic_Av(ctx, out: Path, ylim=(400., 900.), xlim=(-100., 150.), n_pts=26
             color=[qcol[q] for q in order[::-1]], height=.72)
     Vx.axvline(0, color="0.6", lw=.7)
     Vx.set_yticks(np.arange(Q))
-    Vx.set_yticklabels([f"$q_{{{q}}}$" for q in order[::-1]], fontsize=8.5)
+    Vx.set_yticklabels([f"$q_{{{q}}}$" for q in order[::-1]],
+                       fontsize=6.5 if Q > 16 else 8.5)
     Vx.set_xlabel("coefficient", fontsize=9.5); Vx.tick_params(labelsize=8)
     for s_ in ("top", "right"):
         Vx.spines[s_].set_visible(False)
@@ -573,7 +586,8 @@ def schematic_Av(ctx, out: Path, ylim=(400., 900.), xlim=(-100., 150.), n_pts=26
 
     # ---------- the shared basis, with how often each component leads
     R = fig.add_subplot(gs[1, 6:])
-    for r_, q in enumerate(order):
+    basis_show = order[:min(Q, 10)]
+    for r_, q in enumerate(basis_show):
         R.plot(np.arange(a.shape[1]) / 30.0, a[q] - r_ * .30, color=qcol[q], lw=1.9)
         R.text(3.1, -r_ * .30, f"  $q_{{{q}}}$   {100*use[q]/use.sum():.0f}%",
                color=qcol[q], fontsize=9.5, va="center", weight="bold")
@@ -581,9 +595,10 @@ def schematic_Av(ctx, out: Path, ylim=(400., 900.), xlim=(-100., 150.), n_pts=26
     R.tick_params(labelsize=8.5)
     for s_ in ("top", "right", "left"):
         R.spines[s_].set_visible(False)
-    R.set_title("→ WHAT   the shared basis $a$, ranked by how many spikes it leads\n"
-                "$v_s$ over these is the waveform-type signature", fontsize=11,
-                color=C_TIME)
+    shown = f"top {len(basis_show)} of Q={Q}" if len(basis_show) < Q else f"Q={Q}"
+    R.set_title(f"→ WHAT   the shared basis $a$, {shown}, ranked by spike usage\n"
+                "$v_s$ over the full basis is the waveform-type signature",
+                fontsize=11, color=C_TIME)
 
     fig.canvas.draw()
     link(fig, A, B, glyph="\u2248"); link(fig, B, Cx, glyph="\u00d7"); link(fig, Cx, Dx)
@@ -594,15 +609,21 @@ def schematic_Av(ctx, out: Path, ylim=(400., 900.), xlim=(-100., 150.), n_pts=26
           ((bV.x0 + bV.x1) / 2, bV.y1 + .055), colour=C_TIME, rad=-.10, lw=2.3)
     fig.suptitle("Single-source tensor factorization of spike waveforms\n"
                  "$Y_{s,c,t}\\approx g_s(c)\\,(v_s^{\\top}a)_t$   —   one factorization, "
-                 "two readouts: where the neuron is, and what its waveform is" + tag_note,
-                 fontsize=14.5, y=.975)
+                 "two readouts: where the neuron is, and what its waveform is",
+                 fontsize=14.5, y=.985)
+    if tag_note:
+        fig.text(.5, .875, tag_note, ha="center", va="center", fontsize=11.5,
+                 color="0.25", weight="bold")
     fig.savefig(out, dpi=155, bbox_inches="tight", facecolor="white"); plt.close(fig)
 
 
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--runs", type=Path, required=True)
-    ap.add_argument("--tag", default="lat64_monopole_Q8")
+    ap.add_argument("--tag", default=HEADLINE_TAG)
+    ap.add_argument("--tag-note", default=None,
+                    help="optional note appended to the headline; the default headline "
+                         "fit gets its canonical rigid score automatically")
     ap.add_argument("--out", type=Path, default=REPO / "docs/panels")
     ap.add_argument("--only", default="", help="comma-separated schematic names")
     a_ = ap.parse_args()
@@ -617,8 +638,10 @@ def main():
     Y, Yh, off, g, w = rendered(rec, off_all, ck, k, V, musite, S, idx)
     ctx = (rec, ck, k, V, musite, S, site, prof, idx, Y, Yh, off, g, w, dom, qcol)
     # the README headline; the alternates below were the other candidates considered
+    tag_note = (a_.tag_note if a_.tag_note is not None else
+                HEADLINE_NOTE if a_.tag == HEADLINE_TAG else "")
     jobs = [("", lambda c, o: schematic_Av(c, o, (400., 900.), (-100., 150.),
-                                           n_pts=26000)),
+                                           n_pts=26000, tag_note=tag_note)),
             ("_flow_density", lambda c, o: schematic_Av(c, o, (400., 900.),
                                                         (-100., 150.), mode="density")),
             ("_flow_tight", lambda c, o: schematic_Av(c, o, (500., 700.), (-80., 130.),

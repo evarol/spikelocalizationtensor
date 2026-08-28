@@ -41,7 +41,7 @@ This replaces the Adam-on-a scheme the earlier hard fits used, which descended a
 reconstruction term evaluated at a penalized pi and was not monotone.
 
 Usage:
-    python -m spiketensor.fit_lattice --n 32 --Q 8 --kernel monopole
+    python3 zncc/tensor/fit_lattice.py --n 32 --Q 8 --kernel monopole
 """
 from __future__ import annotations
 
@@ -58,7 +58,7 @@ REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO))
 
 from spiketensor import data as D                        # noqa: E402
-from spiketensor.waveforms import load_batch, references     # noqa: E402
+from spiketensor.fit import load_batch, references     # noqa: E402
 
 DEV = "mps" if torch.backends.mps.is_available() else "cpu"
 SIGMAS = 2.0 ** np.arange(10)                          # 1, 2, 4, ... 512 um
@@ -165,8 +165,13 @@ def phi(d, s, kernel):
 class Candidates:
     """The (site x profile) codebook, materialized per channel-config in chunks."""
 
-    def __init__(self, mu, profiles, dev):
-        self.mu = torch.as_tensor(mu, device=dev)               # (K, 3)
+    def __init__(self, mu, profiles, dev, learn=False):
+        m = torch.as_tensor(mu, device=dev)                     # (K, 3)
+        # When learnable, mu is a leaf Parameter so the footprint -- which depends on it
+        # only through ||r_c - mu_k|| -- is differentiable. The assignment step still
+        # treats it as fixed; only the refinement step moves it.
+        self.mu = torch.nn.Parameter(m) if learn else m
+        self.learn = learn
         self.prof = list(profiles)
         self.K, self.S = len(mu), len(self.prof)
         self.KS, self.dev = self.K * self.S, dev
@@ -210,11 +215,16 @@ def footprint(cand, off, k):
     dxy2 = ((off[:, :, 0] - m[:, None, 0]) ** 2
             + (off[:, :, 1] - m[:, None, 1]) ** 2)                         # (b,C)
     dz2 = (m[:, None, 2] ** 2).expand_as(dxy2)
-    g = torch.empty_like(dxy2)
+    # Built OUT OF PLACE. Writing rows into an empty tensor is fine while mu is a
+    # constant, but once mu is learnable the index_put makes the graph un-reusable across
+    # optimizer steps. Each spike takes exactly one profile, so a torch.where fold over the
+    # profiles present in the batch costs |unique(prof)| x b x C and stays differentiable.
+    g = None
     for j in torch.unique(prof).tolist():
-        sel = prof == j
         nm, pr = cand.prof[j]
-        g[sel] = KERNELS[nm](dxy2[sel], dz2[sel], pr)
+        gj = KERNELS[nm](dxy2, dz2, pr)
+        m_ = (prof == j)[:, None]
+        g = gj * m_ if g is None else torch.where(m_, gj, g)
     return g / g.norm(dim=1, keepdim=True).clamp_min(1e-12)
 
 
@@ -234,7 +244,12 @@ class Cache:
     def batch(self, s0, s1):
         return (self.Y[s0:s1].to(self.dev).float(), self.off[s0:s1].to(self.dev))
 
+    def batch_rows(self, rows):
+        r = torch.as_tensor(rows)
+        return (self.Y[r].to(self.dev).float(), self.off[r].to(self.dev))
 
+
+@torch.no_grad()
 def compute_P(rec, idx, off_all, a, dev, blk=16384, cache=None):
     """Stream the waveforms ONCE, contiguously, and reduce each spike to 55 floats.
 
@@ -258,6 +273,7 @@ def compute_P(rec, idx, off_all, a, dev, blk=16384, cache=None):
     return P, y2
 
 
+@torch.no_grad()
 def assign_from_P(cand, P, conf, off_cfg, ks_chunk, spk_chunk, verbose=""):
     """Exact argmax of the Rayleigh quotient over every candidate, waveform-free.
 
@@ -313,11 +329,43 @@ def basis_scatter(cand, rec, idx, off_all, conf, off_cfg, pick, dev, blk=16384,
             Y, off = cache.batch(s0, s0 + len(sub))
         else:
             Y, off = load_batch(rec, sub, off_all, dev)
-        g = footprint(cand, off, pick[s0:s0 + len(sub)])
-        U = torch.einsum("bc,bct->bt", g, Y)
+        with torch.no_grad():
+            g = footprint(cand, off, pick[s0:s0 + len(sub)])
+            U = torch.einsum("bc,bct->bt", g, Y)
         S += (U.T @ U).cpu().double()
         del Y, U, g
     return S
+
+
+def refine_mu(cand, rec, pool, off_all, pick, a, cache, steps, lr, batch, seed=0):
+    """Gradient refinement of the site positions, with the assignment and basis held fixed.
+
+    This is the one block of the fit WITHOUT a closed form: mu enters the footprint through
+    ||r_c - mu_k||, so the residual is nonlinear in it. Everything else is unchanged --
+    given a candidate, the residual is still ||Y||^2 - ||M^T ghat||^2, and only ghat depends
+    on mu. Gradients reach a site only through the spikes currently assigned to it, so
+    unused sites never move.
+
+    Because this step is inexact, the overall objective is no longer guaranteed monotone the
+    way the fixed-lattice version is. The caller re-evaluates after it and logs both, so the
+    convergence panel shows honestly whether the refinement helped."""
+    opt = torch.optim.Adam([cand.mu], lr=lr)
+    rng = np.random.default_rng(seed)
+    n = len(pool)
+    hist = []
+    for st in range(steps):
+        sel = rng.choice(n, min(batch, n), replace=False)
+        sel.sort()
+        Y, off = cache.batch_rows(sel)
+        k = pick[torch.as_tensor(sel, device=cand.dev)]
+        g = footprint(cand, off, k)                     # (b, C), unit norm, differentiable
+        M = Y @ a.T                                     # (b, C, Q)
+        score = torch.einsum("bc,bcq->bq", g, M).pow(2).sum(1)
+        loss = ((Y * Y).sum((1, 2)) - score).mean()
+        opt.zero_grad(set_to_none=True); loss.backward(); opt.step()
+        if st % max(1, steps // 4) == 0:
+            hist.append(float(loss.detach()))
+    return hist
 
 
 def main():
@@ -337,6 +385,14 @@ def main():
                     help="second shape parameter for 2-param families (power exponent, "
                          "student nu, yukawa screening length, DoG surround ratio)")
     ap.add_argument("--tag", default="", help="override the auto tag")
+    ap.add_argument("--learn_mu", action="store_true",
+                    help="initialise mu at the lattice, then refine it by gradient. Makes "
+                         "the spatial codebook a learned point set rather than a grid.")
+    ap.add_argument("--mu_steps", type=int, default=400,
+                    help="gradient steps per outer iteration for the mu refinement")
+    ap.add_argument("--mu_lr", type=float, default=0.5,
+                    help="Adam lr in micrometres; the lattice pitch at n=64 is 4.7 um")
+    ap.add_argument("--mu_batch", type=int, default=16384)
     ap.add_argument("--iters", type=int, default=8)
     ap.add_argument("--n_fit", type=int, default=400000)
     ap.add_argument("--ks_chunk", type=int, default=16384,
@@ -348,7 +404,7 @@ def main():
                          "narrow and throughput collapses (0.3 G/s at B=470)")
     ap.add_argument("--tol", type=float, default=1e-5, help="stop when nMSE gain < tol")
     ap.add_argument("--dataset", default="np1")
-    ap.add_argument("--out", type=Path, default=REPO / "runs")
+    ap.add_argument("--out", type=Path, default=REPO / "zncc/runs/lattice")
     ap.add_argument("--seed", type=int, default=0)
     a_ = ap.parse_args()
     a_.out.mkdir(parents=True, exist_ok=True)
@@ -362,9 +418,9 @@ def main():
     kerns = [k for k in a_.kernel.split(",") if k]
     extra = [float(x) for x in a_.extra.split(",") if x]
     profiles = build_dict(kerns, a_.n_scales, a_.n_aniso, extra)
-    cand = Candidates(mu, profiles, DEV)
+    cand = Candidates(mu, profiles, DEV, learn=a_.learn_mu)
     C, T = rec.waveforms.shape[1], rec.waveforms.shape[2]
-    tag = a_.tag or (f"lat{a_.n}_{'+'.join(kerns)}_Q{a_.Q}"
+    tag = a_.tag or ((("lm" if a_.learn_mu else "lat") + f"{a_.n}_{'+'.join(kerns)}_Q{a_.Q}")
                      + (f"_a{a_.n_aniso}" if a_.n_aniso else "")
                      + (f"_s{a_.n_scales}" if a_.n_scales != 10 else "")
                      + (f"_e{a_.extra.replace(',', '-')}"
@@ -402,13 +458,26 @@ def main():
         S = basis_scatter(cand, rec, pool, off_all, conf_pool, off_cfg, pick, DEV,
                           cache=cache)
         ev, V = torch.linalg.eigh(S)
-        a = V[:, -a_.Q:].flip(1).T.float().contiguous().to(DEV)   # orthonormal, top-Q
-        hist.append({"step": it, "nmse": nmse,
-                     "wall_s": time.perf_counter() - t0,
-                     "used": float(len(torch.unique(pick)))})
+        # detached: the basis is a constant for the mu-refinement block that follows
+        a = V[:, -a_.Q:].flip(1).T.float().contiguous().to(DEV).detach()
+        rec_h = {"step": it, "nmse": nmse, "wall_s": time.perf_counter() - t0,
+                 "used": float(len(torch.unique(pick)))}
+        msg = ""
+        if a_.learn_mu:
+            mu0 = cand.mu.detach().clone()
+            refine_mu(cand, rec, pool, off_all, pick, a, cache,
+                      a_.mu_steps, a_.mu_lr, a_.mu_batch, seed=a_.seed + it)
+            with torch.no_grad():
+                d = (cand.mu.detach() - mu0).norm(dim=1)
+                moved = d[torch.unique(torch.div(pick, cand.S, rounding_mode="floor"))]
+                rec_h["mu_shift_med"] = float(moved.median())
+                rec_h["mu_shift_p95"] = float(moved.quantile(0.95))
+            msg = (f"  · mu moved {rec_h['mu_shift_med']:.2f} µm median, "
+                   f"{rec_h['mu_shift_p95']:.2f} p95")
+        hist.append(rec_h)
         print(f"  iter {it:2d}  nMSE {nmse:.4f}  "
               f"{len(torch.unique(pick)):,} distinct candidates  "
-              f"{hist[-1]['wall_s']:.0f}s", flush=True)
+              f"{rec_h['wall_s']:.0f}s" + msg, flush=True)
         if prev - nmse < a_.tol:
             print(f"  converged (gain {prev-nmse:.2e} < {a_.tol:g})", flush=True)
             break
@@ -429,17 +498,21 @@ def main():
 
     # v_s for the chosen candidate, so downstream viz has an amplitude
     V = np.zeros((rec.n_spikes, a_.Q), np.float32)
-    for s0 in range(0, rec.n_spikes, 16384):
-        sub = allx[s0:s0 + 16384]
-        Y, off = load_batch(rec, sub, off_all, DEV)
-        g = footprint(cand, off, pick[s0:s0 + len(sub)])
-        V[s0:s0 + len(sub)] = torch.einsum("bc,bct,qt->bq", g, Y, a).cpu().numpy()
+    with torch.no_grad():
+        for s0 in range(0, rec.n_spikes, 16384):
+            sub = allx[s0:s0 + 16384]
+            Y, off = load_batch(rec, sub, off_all, DEV)
+            g = footprint(cand, off, pick[s0:s0 + len(sub)])
+            V[s0:s0 + len(sub)] = torch.einsum("bc,bct,qt->bq", g, Y, a).cpu().numpy()
 
     # store the SITE lattice plus the profile count, not the expanded candidate array:
     # a 6-kernel dictionary at 64^3 would be 15.7M rows of (x, y, z)
+    mu_final = cand.mu.detach().cpu().numpy()
+    extra = {"mu_init": mu} if a_.learn_mu else {}   # keep the lattice it started from
     np.savez_compressed(a_.out / f"pi_{tag}.npz", k=KS.astype(np.int32), v=V,
-                        mu_site=mu, S=np.int32(cand.S),
-                        prof_sigma=np.array([p[1][0] for p in cand.prof], np.float32))
+                        mu_site=mu_final, S=np.int32(cand.S),
+                        prof_sigma=np.array([p[1][0] for p in cand.prof], np.float32),
+                        **extra)
     torch.save({"a": a.cpu(), "n": a_.n, "Q": a_.Q, "kernel": a_.kernel,
                 "model": "lattice", "K": cand.K, "S": cand.S, "KS": cand.KS,
                 "span_xy": SPAN_XY, "z_lo": Z_LO, "z_hi": Z_HI,
@@ -458,6 +531,9 @@ def main():
          "profiles": [[p[0], list(p[1])] for p in cand.prof],
          "kernels": kerns, "n_profiles": cand.S,
          "sigmas": sorted({p[1][0] for p in cand.prof}),
+         "learn_mu": bool(a_.learn_mu),
+         "mu_shift_med": (float(np.linalg.norm(mu_final - mu, axis=1)[
+             np.unique(site)].mean()) if a_.learn_mu else 0.0),
          "pos_used_mean": 1.0, "pos_mass_top1": 1.0,
          "amp_median": float(np.median(np.linalg.norm(V, axis=1)))},
         indent=2, default=float))

@@ -1,4 +1,7 @@
 numpy>=1.24
 scipy>=1.10
-torch>=2.1
+torch>=2.0
 matplotlib>=3.7
+pillow>=10.0
+plotly>=5.18        # inlined into the self-contained 3-D viewer
+spikeinterface>=0.103   # canonical dredge_ap only
