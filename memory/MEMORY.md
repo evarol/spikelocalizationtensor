@@ -18,6 +18,8 @@ ANALYTIC_APPROACH
 - [Residual and Codebook Plots](session-006-plots.md) — residual-smoke localization/reconstruction figures, exact two-detection collision examples, and dense Q8/Q12 temporal-codebook rasters
 - [Residual CPU/GPU Profiler](session-005-residual-profiler.md) — 65,610-sample ablation completed: two-chunk codebook learning was held-out neutral; 0.5% stopping kept a stronger 32% event subset but was unexpectedly slower
 - [Continuous Residual Subtraction](session-004-continuous-residual.md) — HIGH PRIORITY: rho identifiability; baseline 16255197 was admin-cancelled at 267/1,958 chunks, and fast benchmark 16257633 failed output equivalence
-- [Q12 Temporal Codebook](session-003-q12-temporal-codebook.md) — old extracted-spike one-hot method improved from Q8 nMSE 0.4928 to Q12 nMSE 0.481783
-- [Analytic Localization](session-001-analytic-localization.md) — completed masked solver, kernel comparison, continuous refinement, and controlled localization plots
 - [Template Residual Detection](session-002-template-residual.md) — completed 10-second smoke run, residual diagnostics, and missing continuous refinement
+
+## Archived
+- [Analytic Localization](archive/session-001-analytic-localization.md) — non-residual masked solver, kernel comparison, continuous refinement
+- [Q12 Temporal Codebook](archive/session-003-q12-temporal-codebook.md) — non-residual old extracted-spike one-hot method, Q8 nMSE 0.4928 → Q12 0.481783

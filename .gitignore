@@ -5,7 +5,7 @@ figures/
 *.md
 !/README.md
 !/RESIDUALS_README.md
-memory/
+!memory/*.md
 docs/
 
 __pycache__/
