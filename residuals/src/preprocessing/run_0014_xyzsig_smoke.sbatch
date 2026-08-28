@@ -15,7 +15,7 @@ set -euo pipefail
 
 ROOT=/scratch/ap7151/iclr-paper/varol-version
 RECORDING=/scratch/ap7151/_RAW_DATA/extra-motion/dataset1_p1/p1_g0_t0.imec0.ap.bin
-OUTPUT=$ROOT/runs/dataset1_p1/0014_xyzsig_smoke_${SLURM_JOB_ID}
+OUTPUT=$ROOT/residuals/runs/dataset1_p1/0014_xyzsig_smoke_${SLURM_JOB_ID}
 cd "$ROOT"
 
 singularity exec --nv --overlay /scratch/${USER}/_ENVS/ibl-sorter.ext3:ro \

@@ -17,7 +17,7 @@ set -euo pipefail
 
 ROOT=/scratch/ap7151/iclr-paper/varol-version
 RECORDING=/scratch/ap7151/_RAW_DATA/extra-motion/dataset1_p1/p1_g0_t0.imec0.ap.bin
-OUTPUT=$ROOT/runs/dataset1_p1/0014_xyzsig_full_score8
+OUTPUT=$ROOT/residuals/runs/dataset1_p1/0014_xyzsig_full_score8
 CHILD_PID=
 
 handle_usr1() {

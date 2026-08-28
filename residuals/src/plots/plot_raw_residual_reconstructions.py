@@ -41,19 +41,25 @@ def load_chunk(run, chunk_index):
         return result
 
 
-def choose_examples(chunk, pass_indices):
+def choose_examples(chunk, pass_indices, per_pass=1):
     chosen = []
     for residual_pass in pass_indices:
         rows = np.flatnonzero(chunk["residual_pass"] == residual_pass)
         if not len(rows):
             raise ValueError(f"chunk has no accepted fits in pass {residual_pass + 1}")
-        strong = rows[
-            chunk["input_energy"][rows] >= np.median(chunk["input_energy"][rows])
-        ]
-        target = np.median(chunk["captured_fraction"][rows])
-        chosen.append(
-            strong[np.argmin(np.abs(chunk["captured_fraction"][strong] - target))]
-        )
+        order = np.argsort(chunk["input_energy"][rows])
+        rows = rows[order]
+        edges = np.linspace(0, len(rows), per_pass + 1).astype(int)
+        for low, high in zip(edges[:-1], edges[1:]):
+            if low == high:
+                continue
+            group = rows[low:high]
+            target = np.median(chunk["captured_fraction"][group])
+            chosen.append(
+                group[np.argmin(np.abs(chunk["captured_fraction"][group] - target))]
+            )
+    if not chosen:
+        raise ValueError("no accepted fits matched the requested passes")
     return np.asarray(chosen, dtype=np.int64)
 
 
@@ -136,14 +142,14 @@ def spatial_width_image(source, rho, extent=165.0, n=241):
     return grid, image
 
 
-def plot_examples(run, chunk, metadata, output, chunk_index, max_examples):
+def plot_examples(run, chunk, metadata, output, chunk_index, max_examples, examples_per_pass=1):
     config = metadata["config"]
     omega = np.load(run / "omega.npy")
     n_passes = int(np.max(chunk["residual_pass"])) + 1
     displayed_passes = np.unique(
         np.rint(np.linspace(0, n_passes - 1, min(max_examples, n_passes))).astype(int)
     )
-    indices = choose_examples(chunk, displayed_passes)
+    indices = choose_examples(chunk, displayed_passes, examples_per_pass)
     mask = chunk["neighbor_ids"][indices] >= 0
     measured = chunk["residual_waveforms"][indices] * mask[:, :, None]
     coordinates = chunk["local_coords"][indices]
@@ -169,7 +175,7 @@ def plot_examples(run, chunk, metadata, output, chunk_index, max_examples):
     figure, axes = plt.subplots(
         5,
         len(indices),
-        figsize=(4.0 * len(indices), 15.0),
+        figsize=(3.4 * len(indices), 15.0),
         constrained_layout=True,
         squeeze=False,
         gridspec_kw={"height_ratios": (1.05, 1.05, 0.7, 1.0, 0.75)},
@@ -189,7 +195,8 @@ def plot_examples(run, chunk, metadata, output, chunk_index, max_examples):
         )
         axis.scatter(coords[:, 0], coords[:, 1], s=7, marker="s", color="0.55")
         axis.set_title(
-            f"pass {int(chunk['residual_pass'][index]) + 1} · median-quality fit\n"
+            f"pass {int(chunk['residual_pass'][index]) + 1} · "
+            f"example {column % examples_per_pass + 1} · median-quality fit\n"
             f"captured {100 * capture:.1f}% · relative residual {100 * (1-capture):.1f}%",
             fontsize=9,
         )
@@ -286,7 +293,7 @@ def plot_examples(run, chunk, metadata, output, chunk_index, max_examples):
 
     figure.suptitle(
         f"Residual-pursuit reconstruction examples · chunk {chunk_index} · "
-        "representative fits across pursuit passes",
+        f"{examples_per_pass} representative fit(s) per pass across {len(displayed_passes)} passes",
         fontsize=14,
     )
     figure.savefig(output / "reconstruction_examples.png", dpi=800)
@@ -415,6 +422,7 @@ def main():
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--chunk-index", type=int, default=0)
     parser.add_argument("--max-examples", type=int, default=4)
+    parser.add_argument("--examples-per-pass", type=int, default=1)
     args = parser.parse_args()
 
     metadata = json.loads((args.run / "config.json").read_text())
@@ -422,7 +430,10 @@ def main():
         raise ValueError("residual reconstruction plots currently require monopole fits")
     chunk = load_chunk(args.run, args.chunk_index)
     args.out.mkdir(parents=True, exist_ok=True)
-    plot_examples(args.run, chunk, metadata, args.out, args.chunk_index, args.max_examples)
+    plot_examples(
+        args.run, chunk, metadata, args.out, args.chunk_index, args.max_examples,
+        args.examples_per_pass,
+    )
     medians = plot_diagnostics(args.run, metadata, args.out)
     print(
         "median captured fraction by pass: "

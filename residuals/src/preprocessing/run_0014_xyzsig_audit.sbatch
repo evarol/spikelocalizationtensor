@@ -14,7 +14,7 @@
 set -euo pipefail
 
 ROOT=/scratch/ap7151/iclr-paper/varol-version
-RUN=${RUN:-$ROOT/runs/dataset1_p1/0014_xyzsig_smoke_16502038}
+RUN=${RUN:-$ROOT/residuals/runs/dataset1_p1/0014_xyzsig_smoke_16502038}
 cd "$ROOT"
 
 singularity exec --nv --overlay /scratch/${USER}/_ENVS/ibl-sorter.ext3:ro \
