@@ -165,7 +165,7 @@ def plot_peeling_overview(run, output):
     for axis in axes.flat:
         axis.grid(alpha=0.18)
     figure.suptitle(
-        f"0016 learned-Omega full recording · {len(rounds):,} accepted events · "
+        f"one-hot lattice full recording · {len(rounds):,} accepted events · "
         f"{n_rounds} peeling rounds",
         fontsize=14,
     )
@@ -280,7 +280,7 @@ def plot_stopping_diagnostics(run, output):
     reason_text = " · ".join(
         f"{label}: {stopping_reasons[label]:,}" for label in stop_labels
     )
-    figure.suptitle(f"0016 stopping diagnostics · {reason_text}", fontsize=13)
+    figure.suptitle(f"one-hot lattice stopping diagnostics · {reason_text}", fontsize=13)
     figure.savefig(output / "stopping_diagnostics.png", dpi=800, bbox_inches="tight")
     plt.close(figure)
 
@@ -336,7 +336,7 @@ def plot_localization_cohorts(run, output):
             ylabel="probe depth (µm)",
         )
     figure.colorbar(image, ax=axes, label="events per spatial bin", pad=0.01)
-    figure.suptitle("0016 localization density by peeling-round cohort", fontsize=14)
+    figure.suptitle("one-hot lattice localization density by peeling-round cohort", fontsize=14)
     figure.savefig(
         output / "localization_by_round_cohort.png", dpi=800, bbox_inches="tight"
     )
@@ -457,7 +457,7 @@ def plot_xyz_localizations(run, output):
             f"{projection[0].upper()}–{projection[1].upper()} · {len(rounds):,} events",
         )
         figure.colorbar(image, ax=axis, label="events per spatial bin", pad=0.01)
-    figure.suptitle("0016 full-recording XYZ localization density", fontsize=14)
+    figure.suptitle("one-hot lattice full-recording XYZ localization density", fontsize=14)
     figure.savefig(
         output / "xyz_localization_density.png", dpi=800, bbox_inches="tight"
     )
@@ -519,7 +519,7 @@ def plot_xyz_localizations(run, output):
             pad=0.01,
         )
     figure.suptitle(
-        "0016 XYZ localization density by peeling-round cohort", fontsize=15
+        "one-hot lattice XYZ localization density by peeling-round cohort", fontsize=15
     )
     figure.savefig(
         output / "xyz_localization_by_round.png", dpi=800, bbox_inches="tight"
@@ -598,7 +598,7 @@ def plot_xyzsigma_scatter(run, output, max_points=500_000, seed=16016):
     colorbar.set_label("selected sigma (µm)")
     colorbar.ax.set_yticklabels([f"{value:g}" for value in sigma_values])
     figure.suptitle(
-        f"0016 XYZ-sigma localizations · {len(keep):,} sampled of "
+        f"one-hot lattice XYZ-sigma localizations · {len(keep):,} sampled of "
         f"{len(sigma_index):,} accepted events",
         fontsize=14,
     )
@@ -776,7 +776,7 @@ def plot_reconstruction_examples(run, output, chunk_index=0, count=6):
                 values,
                 output / name,
                 (
-                    f"0016 saved reconstruction examples · chunk {chunk_index} · "
+                    f"one-hot lattice saved reconstruction examples · chunk {chunk_index} · "
                     + ("round progression" if "by_round" in name else "lowest fitted score in each time segment")
                 ),
             )
