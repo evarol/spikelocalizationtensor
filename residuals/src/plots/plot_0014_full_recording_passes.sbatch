@@ -22,4 +22,5 @@ singularity exec --nv --overlay /scratch/${USER}/_ENVS/ibl-sorter.ext3:ro \
     /share/apps/images/cuda12.8.1-cudnn9.8.0-ubuntu24.04.2.sif \
     /bin/bash -c "source /ext3/env.sh && export PYTHONPATH=\$PWD/residuals/src:\$PWD/residuals/src/plots && \
 python residuals/src/plots/plot_temporal_codebook_depth_time_raster.py --run \"$RUN\" --out \"$OUT/depth_time_omega_raster.png\" --overwrite && \
-python residuals/src/plots/plot_0014_full_recording_passes.py --run \"$RUN\" --out \"$OUT/full_recording_residuals_and_rasters.png\""
+python residuals/src/plots/plot_0014_full_recording_passes.py --run \"$RUN\" --out \"$OUT/full_recording_residuals_and_rasters.png\" && \
+python residuals/src/plots/plot_raw_residual_localizations.py --run \"$RUN\" --out \"$OUT/full_localizations_inferno.png\""

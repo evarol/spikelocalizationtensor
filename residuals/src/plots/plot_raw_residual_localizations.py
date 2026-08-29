@@ -21,7 +21,7 @@ def draw_density(axis, counts, x_edges, depth_edges, contacts, title, norm):
         origin="lower",
         extent=(x_edges[0], x_edges[-1], depth_edges[0], depth_edges[-1]),
         aspect="auto",
-        cmap="magma",
+        cmap="inferno",
         norm=norm,
         interpolation="nearest",
     )

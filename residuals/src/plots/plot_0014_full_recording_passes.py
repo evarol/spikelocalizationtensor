@@ -22,11 +22,15 @@ GRID = "#292929"
 def signed_block_extrema(values, samples_per_bin):
     """Keep the signed largest-magnitude sample in each time bin and channel."""
     n_samples, n_channels = values.shape
-    if n_samples % samples_per_bin:
-        raise ValueError("core length must be divisible by --samples-per-bin")
-    blocks = values.reshape(-1, samples_per_bin, n_channels)
-    index = blocks.abs().argmax(dim=1, keepdim=True)
-    return blocks.gather(1, index).squeeze(1)
+    result = torch.empty(
+        ((n_samples + samples_per_bin - 1) // samples_per_bin, n_channels),
+        dtype=values.dtype, device=values.device,
+    )
+    for index, start in enumerate(range(0, n_samples, samples_per_bin)):
+        block = values[start:start + samples_per_bin]
+        peak = block.abs().argmax(dim=0, keepdim=True)
+        result[index] = block.gather(0, peak).squeeze(0)
+    return result
 
 
 def subtract_saved_predictions(residual, times, ids, predictions, n_before, batch_size):
@@ -121,8 +125,6 @@ def main():
     try:
         for chunk_index, core_start in enumerate(range(first, stop, chunk_samples)):
             core_stop = min(core_start + chunk_samples, stop)
-            if (core_stop - core_start) % args.samples_per_bin:
-                raise ValueError("the final core length must be divisible by --samples-per-bin")
             read_start = max(0, core_start - margin)
             read_stop = min(reader.ns, core_stop + margin)
             data = preprocess_voltage(reader[read_start:read_stop, :n_channels], sos)
@@ -136,7 +138,7 @@ def main():
                 noise = torch.as_tensor(saved["noise"], dtype=torch.float32, device=args.device)
                 local_slice = slice(core_start - read_start, core_stop - read_start)
                 first_bin = (core_start - first) // args.samples_per_bin
-                n_local_bins = (core_stop - core_start) // args.samples_per_bin
+                n_local_bins = int(np.ceil((core_stop - core_start) / args.samples_per_bin))
                 stages[0, :, first_bin:first_bin + n_local_bins] = (
                     signed_block_extrema(residual[local_slice] / noise, args.samples_per_bin)
                     .T.cpu().numpy()
