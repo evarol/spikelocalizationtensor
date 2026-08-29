@@ -81,6 +81,9 @@
 - `residuals/src/plots/0017_initial_threshold_matrix_plots.sbatch` maps all six
   outputs to the same full plotting suite as a six-task CPU array. Submit its
   tasks only after the corresponding run summaries exist.
+- Plot array `16575437` was submitted with `--hold`. Keep all six tasks held
+  until their corresponding `summary.json` files exist, then release the array
+  rather than submitting a second plot job.
 
 ## Links
 
