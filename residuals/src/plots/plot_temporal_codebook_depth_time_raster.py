@@ -9,33 +9,11 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from matplotlib.colors import BoundaryNorm, ListedColormap
 import numpy as np
-from scipy.ndimage import gaussian_filter
 
 
 BACKGROUND = "#0d0d0d"
 FONT = "#d7d7d7"
 GRID = "#292929"
-
-
-def categorical_raster(x, y, labels, weights, palette, xlim, ylim, nx, ny):
-    ix = np.floor((x - xlim[0]) * nx / (xlim[1] - xlim[0])).astype(np.int64)
-    iy = np.floor((y - ylim[0]) * ny / (ylim[1] - ylim[0])).astype(np.int64)
-    keep = (ix >= 0) & (ix < nx) & (iy >= 0) & (iy < ny)
-    flat = iy[keep] * nx + ix[keep]
-    mass = np.bincount(
-        flat, weights=weights[keep], minlength=nx * ny
-    ).reshape(ny, nx).astype(np.float32)
-    rgb = np.zeros((ny, nx, 3), dtype=np.float32)
-    for channel in range(3):
-        rgb[..., channel] = np.bincount(
-            flat, weights=weights[keep] * palette[labels[keep], channel],
-            minlength=nx * ny,
-        ).reshape(ny, nx)
-    mass = gaussian_filter(mass, 0.5)
-    for channel in range(3):
-        rgb[..., channel] = gaussian_filter(rgb[..., channel], 0.5) / np.maximum(mass, 1e-6)
-    intensity = np.clip(1.35 * (1 - np.exp(-mass / 1.4)), 0, 1)
-    return np.asarray([0.05, 0.05, 0.05], dtype=np.float32) * (1 - intensity[..., None]) + rgb * intensity[..., None]
 
 
 def main():
@@ -129,26 +107,12 @@ def main():
     figure, axis = plt.subplots(
         figsize=(15, 7.5), constrained_layout=True, facecolor=BACKGROUND
     )
-    if args.run is None:
-        artist = axis.scatter(
-            time_minutes[rows], depth[rows], c=temporal_idx[rows], cmap=colormap,
-            norm=normalization, marker=".", s=args.marker_size, linewidths=0,
-            alpha=np.clip(args.alpha * np.sqrt(weights[rows]), 0.05, args.alpha),
-            rasterized=True,
-        )
-    else:
-        time_limit = max(float(time_minutes[finite].max()), 1e-9)
-        depth_low, depth_high = np.quantile(depth[finite], (0.002, 0.998))
-        rgb_image = categorical_raster(
-            time_minutes[rows], depth[rows], temporal_idx[rows], weights[rows], rgb,
-            (0.0, time_limit), (depth_low, depth_high), 1750,
-            max(256, int((depth_high - depth_low) / 3)),
-        )
-        axis.imshow(
-            rgb_image, origin="lower", extent=(0.0, time_limit, depth_low, depth_high),
-            aspect="auto", interpolation="nearest",
-        )
-        artist = plt.cm.ScalarMappable(norm=normalization, cmap=colormap)
+    artist = axis.scatter(
+        time_minutes[rows], depth[rows], c=temporal_idx[rows], cmap=colormap,
+        norm=normalization, marker=".",
+        s=args.marker_size * np.clip(np.sqrt(weights[rows]), 0.2, 8.0),
+        linewidths=0, alpha=args.alpha, rasterized=True,
+    )
     axis.set(
         xlabel="recording time (min)",
         ylabel="probe depth (µm)",

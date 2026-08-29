@@ -124,19 +124,17 @@ Do not promote the pipeline further until:
 
 ## Full-recording residual/raster plot (2026-08-28)
 
-- `plot_temporal_codebook_depth_time_raster.py` now weights the categorical
-  Omega-coloured depth × time density by `|alpha|`, normalized by median
-  nonzero reconstruction amplitude, so high-amplitude reconstructed atoms have
-  proportionately greater visual mass without allowing opposite polarities to
-  cancel.
+- `plot_temporal_codebook_depth_time_raster.py` now renders a literal
+  rasterized Omega-coloured scatter plot, with each point area weighted by
+  `sqrt(|alpha|)` after median-amplitude normalization.
 - Added `plot_0014_full_recording_passes.py`: it replays each saved 0014 chunk
   on CUDA using the exact saved `predictions` arrays, pools each stage with a
   sign-preserving temporal extremum, and renders five rows × two columns:
   input plus each of the four residual passes on the left, against an empty
-  then cumulative `|alpha|`-weighted Omega raster on the right.
-- Render job `16528417` (`plot-0014-full-passes`) was submitted for
-  `residuals/out/0014_xyzsig_full_score8/`. It also replaces the standard
-  `depth_time_omega_raster.png` with its amplitude-weighted version.
+  then cumulative `|alpha|`-weighted Omega scatter plot on the right.
+- The binned-raster render `16528417` was cancelled and replaced by scatter
+  render `16528656` (`plot-0014-full-passes`) for
+  `residuals/out/0014_xyzsig_full_score8/`.
 
 ## Reconstruction + codebook plots (2026-08-28, ~18:20)
 

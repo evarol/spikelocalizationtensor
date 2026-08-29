@@ -57,22 +57,6 @@ def amplitude_weights(alpha):
     return (amplitude / max(scale, np.finfo(np.float64).tiny)).astype(np.float32), scale
 
 
-def categorical_raster(x, y, labels, weights, palette, xlim, ylim, nx, ny):
-    ix = np.floor((x - xlim[0]) * nx / (xlim[1] - xlim[0])).astype(np.int64)
-    iy = np.floor((y - ylim[0]) * ny / (ylim[1] - ylim[0])).astype(np.int64)
-    keep = (ix >= 0) & (ix < nx) & (iy >= 0) & (iy < ny)
-    flat = iy[keep] * nx + ix[keep]
-    mass = np.bincount(flat, weights=weights[keep], minlength=nx * ny).reshape(ny, nx)
-    rgb = np.zeros((ny, nx, 3), dtype=np.float32)
-    for channel in range(3):
-        rgb[..., channel] = np.bincount(
-            flat, weights=weights[keep] * palette[labels[keep], channel], minlength=nx * ny
-        ).reshape(ny, nx)
-    intensity = np.clip(1.35 * (1 - np.exp(-mass / 1.4)), 0, 1)
-    color = rgb / np.maximum(mass[..., None], 1e-6)
-    return np.asarray([0.05, 0.05, 0.05], dtype=np.float32) * (1 - intensity[..., None]) + color * intensity[..., None]
-
-
 def style_axis(axis):
     axis.set_facecolor(BACKGROUND)
     axis.grid(color=GRID, alpha=0.8, linewidth=0.45)
@@ -92,14 +76,14 @@ def main():
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--samples-per-bin", type=int, default=10_000)
     parser.add_argument("--reconstruction-batch-size", type=int, default=2_048)
-    parser.add_argument("--raster-width", type=int, default=1_750)
+    parser.add_argument("--marker-size", type=float, default=0.25)
     parser.add_argument("--device", default="cuda")
     parser.add_argument("--overwrite", action="store_true")
     args = parser.parse_args()
     if args.out.exists() and not args.overwrite:
         raise FileExistsError(f"refusing to overwrite {args.out}")
-    if args.samples_per_bin < 1 or args.reconstruction_batch_size < 1 or args.raster_width < 1:
-        raise ValueError("bin, reconstruction batch, and raster width must be positive")
+    if args.samples_per_bin < 1 or args.reconstruction_batch_size < 1 or args.marker_size <= 0:
+        raise ValueError("bin, reconstruction batch, and marker size must be positive")
     if torch.device(args.device).type != "cuda" or not torch.cuda.is_available():
         raise RuntimeError("this full-recording replay requires a CUDA device")
 
@@ -187,7 +171,6 @@ def main():
     colormap = ListedColormap(palette, name=f"q{len(omega)}_rgb")
     boundaries = np.arange(len(omega) + 1, dtype=np.float64) - 0.5
     normalization = BoundaryNorm(boundaries, len(omega))
-    raster_height = max(256, int((depth_high - depth_low) / 3))
     vlim = float(np.quantile(np.abs(stages[0]), 0.995))
     vlim = min(12.0, max(4.0, vlim))
 
@@ -205,22 +188,16 @@ def main():
         )
         if stage == 0:
             voltage_axis.set_title("preprocessed recording")
-            raster_axis.imshow(
-                np.full((raster_height, args.raster_width, 3), 0.05, dtype=np.float32),
-                origin="lower", aspect="auto", extent=(0, time_limit, depth_low, depth_high),
-            )
             raster_axis.set_title("fitted spikes: none")
         else:
             pass_index = stage - 1
             voltage_axis.set_title(f"residual after pass {stage}")
             rows = np.flatnonzero(finite & (residual_pass <= pass_index))
-            raster_axis.imshow(
-                categorical_raster(
-                    time_minutes[rows], depth[rows], np.asarray(temporal_idx[rows]), weights[rows],
-                    palette, (0, time_limit), (depth_low, depth_high), args.raster_width, raster_height,
-                ),
-                origin="lower", aspect="auto", interpolation="nearest",
-                extent=(0, time_limit, depth_low, depth_high),
+            raster_axis.scatter(
+                time_minutes[rows], depth[rows], c=np.asarray(temporal_idx[rows]),
+                cmap=colormap, norm=normalization, marker=".",
+                s=args.marker_size * np.clip(np.sqrt(weights[rows]), 0.2, 8.0),
+                linewidths=0, alpha=0.42, rasterized=True,
             )
             raster_axis.set_title(
                 f"cumulative fits through pass {stage} · {len(rows):,} spikes"
