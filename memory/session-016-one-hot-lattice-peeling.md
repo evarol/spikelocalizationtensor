@@ -158,6 +158,7 @@ the complete-run plots have been reviewed by the user.
 
 ## Links
 
+- [[session-017-initial-threshold-spike-discovery]]
 - [[session-015-score-calibrated-xyzsigma-promotion]]
 - [[session-014-xyzsigma-residual-pursuit]]
 - [[session-009-ibl-style-pursuit]]

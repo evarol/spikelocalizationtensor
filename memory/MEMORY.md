@@ -6,7 +6,7 @@ ANALYTIC_APPROACH
 - [User Profile](user_me.md) — working style and constraints, including outside-sandbox SLURM commands and memory-only session notes
 
 ## Sessions
-- [Initial-Threshold Spike Discovery](session-017-initial-threshold-spike-discovery.md) — ACTIVE: 0017 replaces 0016's template-bank proposal search with `-voltage / MAD-noise >= 6` and five-sample spatiotemporal NMS while retaining the fitted-projection-8 downstream comparison; full job `16575057` submitted, and the complete plot suite must be reviewed before interpreting the experiment.
+- [Initial-Threshold Spike Discovery](session-017-initial-threshold-spike-discovery.md) — ACTIVE: six 0017 full-recording experiments are running/queued (`16575057`, threshold sweep `16575275`, structural checks `16575400`); complete localization/reconstruction plots must be reviewed before interpretation.
 - [One-Hot Lattice Peeling](session-016-one-hot-lattice-peeling.md) — HIGH PRIORITY: learned-Omega full job `16541332` and corrected 14-panel plot job `16569753` completed; full XYZ/XYZ-sigma and saved-reconstruction figures await user review before any promotion, redesign, or rerun decision.
 - [Score-Calibrated XYZ-Sigma Promotion](session-015-score-calibrated-xyzsigma-promotion.md) — HIGH PRIORITY: score-8 full run COMPLETE (`16517915` + gated plots `16517916`); score-9 full run `16529272` queued; first-pass sigma lower-bound forcing is an active fitting-pathology hypothesis; score-boundary review and empirical-null calibration pending.
 - [XYZ-Sigma Residual Pursuit](session-014-xyzsigma-residual-pursuit.md) — HIGH PRIORITY: CUDA-valid discrete xyz-sigma pursuit has final projection gating, cross-pass duplicate suppression, compatible waveform outputs, and a completed score-8 validation chain.
