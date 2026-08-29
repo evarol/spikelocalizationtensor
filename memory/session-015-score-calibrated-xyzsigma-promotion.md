@@ -125,16 +125,16 @@ Do not promote the pipeline further until:
 ## Full-recording residual/raster plot (2026-08-28)
 
 - `plot_temporal_codebook_depth_time_raster.py` now renders a literal
-  rasterized Omega-coloured scatter plot, with each point area weighted by
-  `sqrt(|alpha|)` after median-amplitude normalization.
+  rasterized Omega-coloured scatter plot, with fixed point size and each
+  point's transparency scaled by normalized `|alpha|`.
 - Added `plot_0014_full_recording_passes.py`: it replays each saved 0014 chunk
   on CUDA using the exact saved `predictions` arrays, pools each stage with a
   sign-preserving temporal extremum, and renders five rows × two columns:
   input plus each of the four residual passes on the left, against an empty
-  then cumulative `|alpha|`-weighted Omega scatter plot on the right.
-- The binned-raster render `16528417` was cancelled and replaced by scatter
-  render `16528656` (`plot-0014-full-passes`) for
-  `residuals/out/0014_xyzsig_full_score8/`.
+  then cumulative `|alpha|`-transparent Omega scatter plot on the right.
+- The binned-raster render `16528417` and the marker-area scatter retry
+  `16528656` were cancelled. The opacity-based scatter correction is ready but
+  has not been resubmitted.
 
 ## Reconstruction + codebook plots (2026-08-28, ~18:20)
 

@@ -16,6 +16,12 @@ FONT = "#d7d7d7"
 GRID = "#292929"
 
 
+def amplitude_opacity(weights, maximum):
+    positive = weights[weights > 0]
+    scale = float(np.quantile(positive, 0.98)) if len(positive) else 1.0
+    return np.clip(maximum * weights / max(scale, np.finfo(np.float32).tiny), 0.02, maximum)
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--session", type=Path)
@@ -107,11 +113,11 @@ def main():
     figure, axis = plt.subplots(
         figsize=(15, 7.5), constrained_layout=True, facecolor=BACKGROUND
     )
-    artist = axis.scatter(
-        time_minutes[rows], depth[rows], c=temporal_idx[rows], cmap=colormap,
-        norm=normalization, marker=".",
-        s=args.marker_size * np.clip(np.sqrt(weights[rows]), 0.2, 8.0),
-        linewidths=0, alpha=args.alpha, rasterized=True,
+    colors = colormap(normalization(temporal_idx[rows]))
+    colors[:, 3] = amplitude_opacity(weights[rows], args.alpha)
+    axis.scatter(
+        time_minutes[rows], depth[rows], c=colors, marker=".",
+        s=args.marker_size, linewidths=0, rasterized=True,
     )
     axis.set(
         xlabel="recording time (min)",
@@ -136,7 +142,7 @@ def main():
         spine.set_linewidth(0.5)
 
     colorbar = figure.colorbar(
-        artist,
+        plt.cm.ScalarMappable(norm=normalization, cmap=colormap),
         ax=axis,
         boundaries=boundaries,
         ticks=np.arange(len(omega)),

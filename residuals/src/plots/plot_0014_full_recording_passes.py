@@ -57,6 +57,12 @@ def amplitude_weights(alpha):
     return (amplitude / max(scale, np.finfo(np.float64).tiny)).astype(np.float32), scale
 
 
+def amplitude_opacity(weights, maximum=0.42):
+    positive = weights[weights > 0]
+    scale = float(np.quantile(positive, 0.98)) if len(positive) else 1.0
+    return np.clip(maximum * weights / max(scale, np.finfo(np.float32).tiny), 0.02, maximum)
+
+
 def style_axis(axis):
     axis.set_facecolor(BACKGROUND)
     axis.grid(color=GRID, alpha=0.8, linewidth=0.45)
@@ -193,11 +199,11 @@ def main():
             pass_index = stage - 1
             voltage_axis.set_title(f"residual after pass {stage}")
             rows = np.flatnonzero(finite & (residual_pass <= pass_index))
+            colors = colormap(normalization(np.asarray(temporal_idx[rows])))
+            colors[:, 3] = amplitude_opacity(weights[rows])
             raster_axis.scatter(
-                time_minutes[rows], depth[rows], c=np.asarray(temporal_idx[rows]),
-                cmap=colormap, norm=normalization, marker=".",
-                s=args.marker_size * np.clip(np.sqrt(weights[rows]), 0.2, 8.0),
-                linewidths=0, alpha=0.42, rasterized=True,
+                time_minutes[rows], depth[rows], c=colors, marker=".",
+                s=args.marker_size, linewidths=0, rasterized=True,
             )
             raster_axis.set_title(
                 f"cumulative fits through pass {stage} · {len(rows):,} spikes"
