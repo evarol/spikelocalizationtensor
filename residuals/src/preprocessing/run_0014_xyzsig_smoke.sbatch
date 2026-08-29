@@ -17,7 +17,8 @@ ROOT=/scratch/ap7151/iclr-paper/varol-version
 RECORDING=/scratch/ap7151/_RAW_DATA/extra-motion/dataset1_p1/p1_g0_t0.imec0.ap.bin
 OUTPUT=$ROOT/residuals/runs/dataset1_p1/0014_xyzsig_smoke_${SLURM_JOB_ID}
 cd "$ROOT"
+echo "score-9 XYZ-sigma smoke: $OUTPUT"
 
 singularity exec --nv --overlay /scratch/${USER}/_ENVS/ibl-sorter.ext3:ro \
     /share/apps/images/cuda12.8.1-cudnn9.8.0-ubuntu24.04.2.sif \
-    /bin/bash -c "source /ext3/env.sh && python -m py_compile residuals/src/preprocessing/residuals_0012.py residuals/src/preprocessing/0014_xyzsig_residual.py && python residuals/src/preprocessing/0014_xyzsig_residual.py all $RECORDING $OUTPUT --duration-seconds 10"
+    /bin/bash -c "source /ext3/env.sh && python -m py_compile residuals/src/preprocessing/residuals_0012.py residuals/src/preprocessing/0014_xyzsig_residual.py && python residuals/src/preprocessing/0014_xyzsig_residual.py all $RECORDING $OUTPUT --duration-seconds 10 --threshold 9 --min-fitted-projection 9"

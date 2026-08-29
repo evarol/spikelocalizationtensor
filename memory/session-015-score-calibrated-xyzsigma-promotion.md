@@ -150,3 +150,31 @@ Do not promote the pipeline further until:
   codebook row as waveform + overall usage fraction + per-pass fraction.
   Score-8 usage: row 5 dominates (24.34% overall, 25.7% P1 → 20.0% P4), row 1
   second (22.43%); rows 6/7 grow with pass (row 7: 7.9% P1 → 17.5% P4).
+
+## Spatial-spread diagnosis (2026-08-28)
+
+- Working hypothesis from the user: the first residual-pursuit pass is forcing
+  fitted spatial scale `sigma` toward its lower bound. Treat this as a fitting
+  pathology to test, not an established physical localization result.
+- The pass-wise sigma heatmap is at
+  `residuals/out/0014_xyzsig_full_score8/sigma_by_residual_pass.png`; inspect
+  it together with the per-chunk x/y/z-by-pass heatmaps before changing the
+  spatial model or selection gate.
+
+## Score-9 smoke comparison (2026-08-28)
+
+- Raised the coupled proposal and final fitted-projection thresholds from 8 to
+  9 in the 0014 defaults and smoke invocation. Audit retention coverage now
+  includes scores 9 and 10.
+- CUDA smoke `16529119` is submitted against the standard 10-second recording
+  window. Review its audit and plots before considering a score-9 full run.
+
+## Score-9 full recording (2026-08-28)
+
+- Full score-9 pursuit `16529272` is queued with four residual passes,
+  2,048-event fit batches, one-second chunks, USR1 checkpoint/requeue support,
+  and both proposal and fitted-projection thresholds fixed at 9. Output:
+  `residuals/runs/dataset1_p1/0014_xyzsig_full_score9/`.
+- Do not attach plots with an `afterok` dependency: requeues can make that
+  dependency unsatisfiable. After the full run has completed, submit the full
+  plot suite manually against the score-9 output.

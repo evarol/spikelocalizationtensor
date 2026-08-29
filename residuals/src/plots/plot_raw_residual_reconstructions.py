@@ -17,6 +17,20 @@ EPS = np.finfo(np.float32).tiny
 PASS_COLORS = ("#482878", "#31688e", "#35b779", "#b5de2b")
 
 
+def resolve_plot_config(metadata):
+    config = dict(metadata["config"])
+    if "kernel" not in config:
+        if "monopole" not in metadata.get("model", "").lower():
+            raise KeyError("run metadata does not identify its spatial kernel")
+        config["kernel"] = "monopole"
+    if "unnormalized_spatial_footprint" not in config:
+        config["unnormalized_spatial_footprint"] = (
+            config["kernel"] == "monopole"
+            and "monopole" in metadata.get("model", "").lower()
+        )
+    return config
+
+
 def load_chunk(run, chunk_index):
     path = run / "chunks" / f"chunk_{chunk_index:06d}.npz"
     required = {
@@ -426,7 +440,9 @@ def main():
     args = parser.parse_args()
 
     metadata = json.loads((args.run / "config.json").read_text())
-    if metadata["config"]["kernel"] != "monopole":
+    config = resolve_plot_config(metadata)
+    metadata = {**metadata, "config": config}
+    if config["kernel"] != "monopole":
         raise ValueError("residual reconstruction plots currently require monopole fits")
     chunk = load_chunk(args.run, args.chunk_index)
     args.out.mkdir(parents=True, exist_ok=True)

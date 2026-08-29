@@ -15,6 +15,7 @@ from scipy.ndimage import gaussian_filter
 from plot_raw_residual_reconstructions import (
     EPS,
     reconstruct_saved_fit,
+    resolve_plot_config,
     spatial_width_image,
 )
 
@@ -55,7 +56,7 @@ def load_examples(run, count=4):
 def plot_spikes(run, out, metadata):
     chunk, rows = load_examples(run)
     omega = np.load(run / "omega.npy")
-    config = metadata["config"]
+    config = resolve_plot_config(metadata)
     mask = chunk["neighbor_ids"] >= 0
     measured = chunk["residual_waveforms"] * mask[:, :, None]
     footprint, predicted = reconstruct_saved_fit(

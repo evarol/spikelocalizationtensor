@@ -81,7 +81,7 @@ def main():
         },
         "fitted_projection_retention": {
             str(threshold): float(np.mean(np.sqrt(np.maximum(saved["captured_energy"], 0)) >= threshold))
-            for threshold in (3, 4, 5, 6, 7, 8)
+            for threshold in (3, 4, 5, 6, 7, 8, 9, 10)
         },
         "near_prior_event_fraction": recurrence(
             saved["spike_times"], saved["spike_channels"], saved["residual_pass"],

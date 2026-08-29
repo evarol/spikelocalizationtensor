@@ -31,7 +31,7 @@ EPS = BASE.EPS
 @dataclass(frozen=True)
 class Config:
     q: int = 8
-    threshold: float = 8.0
+    threshold: float = 9.0
     radius_um: float = 48.0
     merge_radius_um: float = 48.0
     ms_before: float = 1.5
@@ -51,7 +51,7 @@ class Config:
     max_events_per_pass: int = 40000
     max_channel_normalized_rmse: float = 3.0
     min_captured_fraction: float = 0.0
-    min_fitted_projection: float = 8.0
+    min_fitted_projection: float = 9.0
     cross_pass_lockout_ms: float = 0.5
     min_pass_energy_drop_fraction: float = 0.0
     spatial_score: str = "max-channel-rmse"
