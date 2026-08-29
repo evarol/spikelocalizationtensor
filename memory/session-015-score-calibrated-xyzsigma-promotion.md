@@ -122,6 +122,22 @@ Do not promote the pipeline further until:
   plot sbatch files. Other legacy sbatch scripts still point at the old
   top-level paths and need the same fix before reuse.
 
+## Full-recording residual/raster plot (2026-08-28)
+
+- `plot_temporal_codebook_depth_time_raster.py` now weights the categorical
+  Omega-coloured depth × time density by `|alpha|`, normalized by median
+  nonzero reconstruction amplitude, so high-amplitude reconstructed atoms have
+  proportionately greater visual mass without allowing opposite polarities to
+  cancel.
+- Added `plot_0014_full_recording_passes.py`: it replays each saved 0014 chunk
+  on CUDA using the exact saved `predictions` arrays, pools each stage with a
+  sign-preserving temporal extremum, and renders five rows × two columns:
+  input plus each of the four residual passes on the left, against an empty
+  then cumulative `|alpha|`-weighted Omega raster on the right.
+- Render job `16528417` (`plot-0014-full-passes`) was submitted for
+  `residuals/out/0014_xyzsig_full_score8/`. It also replaces the standard
+  `depth_time_omega_raster.png` with its amplitude-weighted version.
+
 ## Reconstruction + codebook plots (2026-08-28, ~18:20)
 
 - Job `16525720` (`plot-x8-full`, 1m56s) regenerated the reconstruction

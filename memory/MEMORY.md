@@ -6,7 +6,7 @@ ANALYTIC_APPROACH
 - [User Profile](user_me.md) — working style and constraints, including outside-sandbox SLURM commands and memory-only session notes
 
 ## Sessions
-- [Score-Calibrated XYZ-Sigma Promotion](session-015-score-calibrated-xyzsigma-promotion.md) — HIGH PRIORITY: score-8 full run COMPLETE (`16517915` + gated plots `16517916`); score-6 `16514699` auto-requeue lost at chunk 772/1958 and needs resubmission; `runs/`+`out/` consolidated into `residuals/` and 0014 sbatch paths updated; score-boundary review and empirical-null calibration pending.
+- [Score-Calibrated XYZ-Sigma Promotion](session-015-score-calibrated-xyzsigma-promotion.md) — HIGH PRIORITY: score-8 full run COMPLETE (`16517915` + gated plots `16517916`); score-6 `16514699` auto-requeue lost at chunk 772/1958 and needs resubmission; `runs/`+`out/` consolidated into `residuals/`; alpha-weighted Omega raster plus full residual/raster render `16528417` submitted; score-boundary review and empirical-null calibration pending.
 - [XYZ-Sigma Residual Pursuit](session-014-xyzsigma-residual-pursuit.md) — HIGH PRIORITY: CUDA-valid discrete xyz-sigma pursuit has final projection gating, cross-pass duplicate suppression, compatible waveform outputs, and a completed score-8 validation chain.
 - [Rho Localization Optimization Plan](session-013-rho-localization-optimization-plan.md) — HIGH PRIORITY: identity-transform fast path is bitwise-equivalent and 11.4% faster; cache constants/geometries and vectorize ordered backtracks next.
 - [Standalone Residual Pursuit](session-012-rho-implementation-plan.md) — HIGH PRIORITY: standalone GPU-dense `Omega × sigma` detection and exhaustive lattice pursuit implemented; CPU synthetic validation passed and CUDA smoke `16489425` is pending.

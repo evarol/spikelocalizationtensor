@@ -17,18 +17,21 @@ FONT = "#d7d7d7"
 GRID = "#292929"
 
 
-def categorical_raster(x, y, labels, palette, xlim, ylim, nx, ny):
+def categorical_raster(x, y, labels, weights, palette, xlim, ylim, nx, ny):
     ix = np.floor((x - xlim[0]) * nx / (xlim[1] - xlim[0])).astype(np.int64)
     iy = np.floor((y - ylim[0]) * ny / (ylim[1] - ylim[0])).astype(np.int64)
     keep = (ix >= 0) & (ix < nx) & (iy >= 0) & (iy < ny)
     flat = iy[keep] * nx + ix[keep]
-    count = np.bincount(flat, minlength=nx * ny).reshape(ny, nx).astype(np.float32)
+    mass = np.bincount(
+        flat, weights=weights[keep], minlength=nx * ny
+    ).reshape(ny, nx).astype(np.float32)
     rgb = np.zeros((ny, nx, 3), dtype=np.float32)
     for channel in range(3):
         rgb[..., channel] = np.bincount(
-            flat, weights=palette[labels[keep], channel], minlength=nx * ny
+            flat, weights=weights[keep] * palette[labels[keep], channel],
+            minlength=nx * ny,
         ).reshape(ny, nx)
-    mass = gaussian_filter(count, 0.5)
+    mass = gaussian_filter(mass, 0.5)
     for channel in range(3):
         rgb[..., channel] = gaussian_filter(rgb[..., channel], 0.5) / np.maximum(mass, 1e-6)
     intensity = np.clip(1.35 * (1 - np.exp(-mass / 1.4)), 0, 1)
@@ -71,6 +74,7 @@ def main():
         with np.load(args.fit, allow_pickle=False) as fit:
             sources = np.asarray(fit["sources"], dtype=np.float32)
             temporal_idx = np.asarray(fit["temporal_idx"], dtype=np.int64)
+            alpha = np.asarray(fit["alpha"], dtype=np.float32)
             omega = np.asarray(fit["omega"], dtype=np.float32)
         depth = np.asarray(centroids[:, 1], dtype=np.float32) + sources[:, 1]
     else:
@@ -79,6 +83,7 @@ def main():
         spike_times = np.load(args.run / "spike_times.npy", mmap_mode="r")
         sources = np.load(args.run / "global_sources.npy", mmap_mode="r")
         temporal_idx = np.load(args.run / "temporal_idx.npy", mmap_mode="r")
+        alpha = np.load(args.run / "alpha.npy", mmap_mode="r")
         omega = np.load(args.run / "omega.npy")
         depth = np.asarray(sources[:, 1], dtype=np.float32)
 
@@ -91,6 +96,8 @@ def main():
         raise ValueError(
             f"expected temporal_idx with shape {(event_count,)}, got {temporal_idx.shape}"
         )
+    if alpha.shape != (event_count,):
+        raise ValueError(f"expected alpha with shape {(event_count,)}, got {alpha.shape}")
     if omega.ndim != 2 or len(omega) < 2:
         raise ValueError(f"expected at least two temporal rows, got {omega.shape}")
     if event_count == 0:
@@ -106,6 +113,11 @@ def main():
     if args.max_points and len(rows) > args.max_points:
         rng = np.random.default_rng(args.seed)
         rows = np.sort(rng.choice(rows, args.max_points, replace=False))
+    amplitude = np.abs(np.asarray(alpha, dtype=np.float64))
+    amplitude = np.where(np.isfinite(amplitude), amplitude, 0.0)
+    positive = amplitude[amplitude > 0]
+    amplitude_scale = float(np.median(positive)) if len(positive) else 1.0
+    weights = (amplitude / max(amplitude_scale, np.finfo(np.float64).tiny)).astype(np.float32)
 
     rgb = plt.colormaps["rainbow"](
         np.linspace(0.0, 1.0, len(omega))
@@ -121,13 +133,14 @@ def main():
         artist = axis.scatter(
             time_minutes[rows], depth[rows], c=temporal_idx[rows], cmap=colormap,
             norm=normalization, marker=".", s=args.marker_size, linewidths=0,
-            alpha=args.alpha, rasterized=True,
+            alpha=np.clip(args.alpha * np.sqrt(weights[rows]), 0.05, args.alpha),
+            rasterized=True,
         )
     else:
         time_limit = max(float(time_minutes[finite].max()), 1e-9)
         depth_low, depth_high = np.quantile(depth[finite], (0.002, 0.998))
         rgb_image = categorical_raster(
-            time_minutes[rows], depth[rows], temporal_idx[rows], rgb,
+            time_minutes[rows], depth[rows], temporal_idx[rows], weights[rows], rgb,
             (0.0, time_limit), (depth_low, depth_high), 1750,
             max(256, int((depth_high - depth_low) / 3)),
         )
@@ -141,7 +154,7 @@ def main():
         ylabel="probe depth (µm)",
         title=(
             f"Q={len(omega)} temporal-codebook selections · "
-            f"{len(rows):,} / {event_count:,} spikes displayed"
+            f"|α|-weighted density · {len(rows):,} / {event_count:,} spikes displayed"
         ),
     )
     axis.set_xlim(0.0, max(float(time_minutes[finite].max()), 1e-9))
@@ -176,8 +189,8 @@ def main():
     figure.savefig(args.out, dpi=800, facecolor=BACKGROUND)
     plt.close(figure)
     print(
-        f"wrote {args.out} with {len(rows):,}/{event_count:,} spikes and "
-        f"{len(omega)} linspaced RGB colors",
+        f"wrote {args.out} with {len(rows):,}/{event_count:,} spikes, "
+        f"median |alpha|={amplitude_scale:.3e}, and {len(omega)} linspaced RGB colors",
         flush=True,
     )
 
