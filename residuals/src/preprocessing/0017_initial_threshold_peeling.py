@@ -24,6 +24,7 @@ _validate_config_0016 = PIPELINE.validate_config
 class Config(PIPELINE.Config):
     threshold: float = 6.0
     discovery_temporal_radius_samples: int = 5
+    discovery_isolation_radius_samples: int = 0
 
 
 def output_metadata(config, recording_path, fs, n_channels, first, stop):
@@ -37,6 +38,8 @@ def output_metadata(config, recording_path, fs, n_channels, first, stop):
     metadata["discovery_score"] = "-voltage / per-channel robust noise"
     metadata["discovery_threshold_units"] = "per-channel robust-noise standard deviations"
     metadata["discovery_template_search"] = False
+    if config.discovery_isolation_radius_samples == 0:
+        metadata["config"].pop("discovery_isolation_radius_samples")
     return metadata
 
 
@@ -57,6 +60,11 @@ def detect_events(
     n_before = int(round(config.ms_before * fs / 1000))
     peak_start = min(len(scores), valid_start + n_before)
     peak_stop = min(len(scores), valid_stop + n_before)
+    maximum = (
+        None
+        if config.discovery_isolation_radius_samples
+        else config.max_events_per_pass
+    )
     times, channels, selected_scores = BASE.spatiotemporal_nms(
         scores,
         (safe_detection_ids, valid_neighbors),
@@ -64,8 +72,46 @@ def detect_events(
         config.discovery_temporal_radius_samples,
         peak_start,
         peak_stop,
-        config.max_events_per_pass,
+        maximum,
     )
+    before_isolation = len(times)
+    if config.discovery_isolation_radius_samples and len(times):
+        occupancy = torch.zeros_like(scores, dtype=torch.bool)
+        occupancy[times, channels] = True
+        prefix = torch.cat(
+            (
+                torch.zeros(
+                    (1, scores.shape[1]), dtype=torch.int32, device=scores.device
+                ),
+                occupancy.cumsum(dim=0, dtype=torch.int32),
+            )
+        )
+        radius = config.discovery_isolation_radius_samples
+        left = (times - radius).clamp_min(0)
+        right = (times + radius + 1).clamp_max(len(scores))
+        neighbors = safe_detection_ids[channels]
+        valid = valid_neighbors[channels]
+        counts = (
+            prefix[right[:, None], neighbors]
+            - prefix[left[:, None], neighbors]
+        ).masked_fill(~valid, 0).sum(dim=1)
+        keep = counts == 1
+        times = times[keep]
+        channels = channels[keep]
+        selected_scores = selected_scores[keep]
+    if config.max_events_per_pass is not None and len(times) > config.max_events_per_pass:
+        selected_scores, keep = torch.topk(
+            selected_scores,
+            config.max_events_per_pass,
+            largest=True,
+            sorted=False,
+        )
+        times = times[keep]
+        channels = channels[keep]
+        order = torch.argsort(times, stable=True)
+        times = times[order]
+        channels = channels[order]
+        selected_scores = selected_scores[order]
     unavailable = torch.full_like(times, -1)
     return (
         times,
@@ -80,6 +126,8 @@ def detect_events(
             "time_samples_above_threshold": int(
                 (scores.amax(dim=1) >= config.threshold).sum().item()
             ),
+            "local_maxima_before_isolation": before_isolation,
+            "isolated_proposals": len(times),
         },
     )
 
@@ -90,6 +138,8 @@ def validate_config(config):
         raise ValueError("initial spike threshold must be positive")
     if config.discovery_temporal_radius_samples < 0:
         raise ValueError("discovery temporal radius must be nonnegative")
+    if config.discovery_isolation_radius_samples < 0:
+        raise ValueError("discovery isolation radius must be nonnegative")
 
 
 def self_test(device):
@@ -121,6 +171,27 @@ def self_test(device):
         raise AssertionError("template-free discoveries must use unavailable sentinels")
     if counts["channel_samples_above_threshold"] != 2:
         raise AssertionError("threshold crossing count is incorrect")
+    isolated_config = Config(
+        device=device,
+        discovery_temporal_radius_samples=5,
+        discovery_isolation_radius_samples=30,
+    )
+    isolated_residual = torch.zeros(64, 3, device=device)
+    isolated_residual[20, 1] = -7
+    isolated_residual[30, 2] = -6.5
+    isolated = detect_events(
+        isolated_residual,
+        noise,
+        torch.empty(0, device=device),
+        footprints,
+        safe_ids,
+        isolated_config,
+        1000,
+        0,
+        len(isolated_residual),
+    )
+    if len(isolated[0]) or isolated[-1]["local_maxima_before_isolation"] != 2:
+        raise AssertionError("wide discovery isolation is incorrect")
     print("0017 self-test passed", flush=True)
 
 
