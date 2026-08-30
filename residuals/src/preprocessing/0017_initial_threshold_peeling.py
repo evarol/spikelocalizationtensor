@@ -54,12 +54,9 @@ def detect_events(
     valid_start,
     valid_stop,
 ):
-    del omega
+    del omega, fs
     scores = -residual / noise[None]
     valid_neighbors = footprints.abs().sum(dim=1) > 0
-    n_before = int(round(config.ms_before * fs / 1000))
-    peak_start = min(len(scores), valid_start + n_before)
-    peak_stop = min(len(scores), valid_stop + n_before)
     maximum = (
         None
         if config.discovery_isolation_radius_samples
@@ -70,8 +67,8 @@ def detect_events(
         (safe_detection_ids, valid_neighbors),
         config.threshold,
         config.discovery_temporal_radius_samples,
-        peak_start,
-        peak_stop,
+        valid_start,
+        valid_stop,
         maximum,
     )
     before_isolation = len(times)
@@ -192,6 +189,25 @@ def self_test(device):
     )
     if len(isolated[0]) or isolated[-1]["local_maxima_before_isolation"] != 2:
         raise AssertionError("wide discovery isolation is incorrect")
+    boundary_config = Config(device=device, discovery_temporal_radius_samples=0)
+    boundary_residual = torch.zeros(256, 1, device=device)
+    boundary_residual[44, 0] = -7
+    boundary_residual[45, 0] = -8
+    boundary_residual[211, 0] = -9
+    boundary_residual[212, 0] = -10
+    boundary = detect_events(
+        boundary_residual,
+        torch.ones(1, device=device),
+        torch.empty(0, device=device),
+        torch.ones(1, 1, 1, device=device),
+        torch.zeros(1, 1, dtype=torch.long, device=device),
+        boundary_config,
+        30000,
+        45,
+        212,
+    )
+    if boundary[0].tolist() != [45, 211]:
+        raise AssertionError("discovery must preserve center-aligned valid bounds")
     print("0017 self-test passed", flush=True)
 
 
