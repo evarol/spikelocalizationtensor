@@ -1,180 +1,129 @@
-# Session 015: Score-Calibrated XYZ-Sigma Promotion
+# Score-Calibrated XYZ-Sigma Promotion (0015)
 **Created:** 2026-08-28
 **Last updated:** 2026-08-28 (evening, ~18:30)
+**Status:** Score-8 full run + plots complete; score-6 unfinished (resumable); score-9 full run was queued
 
-## Context
+## The question
 
-Promote session 0014's fixed `alpha * monopole(x,y,z,sigma) * Omega[q]`
-model without starting another model lineage. The remaining question is whether
-maximized template scores near the selection boundary are spikes or noise.
-Captured fraction is not the answer: it includes irreducible noise energy across
-the complete local channel-by-time waveform.
+Promote 0014's `alpha * monopole(x,y,z,sigma) * Omega[q]` model without
+starting another model lineage. The open question: are maximized template
+scores near the selection boundary spikes or noise? Captured fraction cannot
+answer that — its denominator includes irreducible noise energy across the
+whole local channel-by-time waveform.
 
-## Job outcome summary (2026-08-28)
+## Job outcomes (2026-08-28)
 
-### Score-8 chain — COMPLETE
-- `16513755` (`xyzsig0014-full`): **CANCELLED+** 13:31 after 2h02m at chunk
-  1094/1958 (USR1 signal trap, not a pursuit failure; all passes healthy).
-- `16517915` (`xyzsig0014-full`, manual requeue of the same sbatch): **COMPLETED**
-  14:30–16:07 (1h36m52s). `--resume` continued from chunk ~1094 and finished the
-  full recording. Output: `runs/dataset1_p1/0014_xyzsig_full_score8/`.
-- `16517916` (`plot-x8`, `afterok:16517915`): **COMPLETED** 16:08–16:11 (3m10s).
-  Eight-panel suite written to `out/0014_xyzsig_full_score8/`.
-- **Score-8 full recording + plots are done.**
+**Score-8 chain — complete.** The first full job `16513755` was cancelled by
+the USR1 signal trap after 2h02m at chunk 1094/1958 (all passes healthy —
+not a pursuit failure). Resubmission `16517915` resumed from ~1094 with
+`--resume` and finished in 1h36m52s; dependent plot job `16517916` wrote the
+eight-panel suite to `residuals/out/0014_xyzsig_full_score8/`. Output run:
+`residuals/runs/dataset1_p1/0014_xyzsig_full_score8/`.
 
-### Score-6 chain — INCOMPLETE (stopped mid-run)
-- `16514699` (`xyzsig0014-full-s6`): **CANCELLED+** 14:31 after 2h27m at chunk
-  772/1958 (USR1 signal trap). Its auto-requeue did **not** materialize as a new
-  running instance — only the OOD-jupyter job is in the queue as of 16:15.
-- `16517890` (`plot-s6`, `afterok:16514699`): **CANCELLED** — its dependency was
-  cancelled, so the afterok constraint was unsatisfiable.
-- To finish score-6: resubmit `residuals/src/preprocessing/run_0014_xyzsig_full_score6.sbatch`
-  (`--resume` picks up at chunk ~772), then reseck the plot job with
-  `afterok:<newwid>`.
+**Score-6 chain — incomplete.** Full job `16514699` was cancelled by the
+USR1 trap after 2h27m at chunk 772/1958, and its auto-requeue never
+materialized; its plot job `16517890` died with the unsatisfiable
+`afterok` dependency. To finish: resubmit
+`residuals/src/preprocessing/run_0014_xyzsig_full_score6.sbatch` (`--resume`
+picks up at ~772), then submit plots against the new job ID.
 
-## Resolved smoke results (2026-08-28)
+**Score-9.** Full run `16529272` was queued (proposal and fitted-projection
+thresholds 9, four residual passes, 2,048-event batches, one-second chunks,
+USR1 checkpoint/requeue), output `residuals/runs/dataset1_p1/0014_xyzsig_full_score9/`.
+Its CUDA smoke `16529119` was submitted against the standard 10-second
+window with audit retention extended to scores 9 and 10. Same plot rule: no
+`afterok` on requeueable runs — submit the suite manually after completion.
 
-- `16503279`, `16503283`, `16503486` all completed. Score-8 smoke: 2m56s,
-  202,654 events (vs 356,315 in corrected score-6 smoke). Every accepted pass
-  reduced residual energy.
-- Audit: max direct captured-fraction arithmetic error 1.91e-7; fitted scores
-  ≥ 8.00029 on chunk 0; zero later-pass events within the 0.5 ms/48 um
-  cross-pass exclusion.
-- Eight standard plots at `out/0014_xyzsig_smoke_16503279/`.
+Smoke evidence behind the thresholds: score-8 smoke `16503279` (2m56s,
+202,654 events vs 356,315 at corrected score 6), audit showing fitted scores
+≥ 8.00029 on chunk 0 and zero cross-pass events within 0.5 ms/48 µm; eight
+standard plots under `out/0014_xyzsig_smoke_16503279/`.
 
-## Full-recording runs (queued 2026-08-28)
+## Decisions
 
-- Score-8 (`16513755`/`16517915`): unchanged score-8 model, `all` stages, proposal
-  and fitted-projection thresholds 8, four residual passes, 2,048-event fit
-  batches, one-second chunks, 24 h limit, `--signal=B:USR1@60` + `--requeue`.
-  Output `runs/dataset1_p1/0014_xyzsig_full_score8/`, account `torch_pr_60_general`.
-- Score-6 (`16514699`): same config, thresholds 6, account `torch_pr_62_general`,
-  output `runs/dataset1_p1/0014_xyzsig_full_score6/`. Requires resubmission to
-  finish the last ~60% of chunks.
+1. Finish score-6 with `--resume`, then compare score 8 vs 6 on counts by
+   pass, pass-wise energy drops, fitted-score distributions, sigma/rho
+   boundary mass, runtime, and plots.
+2. Inspect examples near the score boundary specifically — not just
+   high-input-energy or median cases. Require centered temporal structure, a
+   coherent multi-channel footprint, and post-fit normalized channel
+   residuals consistent with noise.
+3. Keep proposal and final-fit thresholds coupled unless a controlled
+   experiment shows a reason to separate them. Never use captured fraction
+   alone as the spike/noise gate.
 
-## Immediate decisions
+## Empirical noise calibration (planned)
 
-1. Finish the score-6 full run (resubmit with `--resume`), then compare score 8
-   directly with score-6 using counts by pass, pass-wise energy drops, fitted
-   projection distributions, sigma/rho boundary mass, runtime, and plots.
-2. Inspect examples near the score-8 boundary, not only high-input-energy or
-   median examples. Require centered temporal structure, coherent multi-channel
-   footprint, and post-fit normalized channel residuals consistent with noise.
-3. Keep proposal and final-fit thresholds coupled unless a controlled experiment
-   shows a reason to separate them. Never use captured fraction alone as the
-   spike/noise gate.
-
-## Empirical noise calibration
-
-Construct a held-out null that preserves the recording's filtered temporal
+Build a held-out null that preserves the recording's filtered temporal
 spectrum and channel noise structure while destroying spike-like
-spatiotemporal alignment. Run the identical Omega-by-spatial-bank search and
-full xyz-sigma fit on that null. Report candidate and final fitted-score tails at
-6, 7, 8, 9, 10, then choose the lowest threshold whose estimated false detection
-burden is acceptable after the full bank search. Do not interpret a maximized
-score as an uncorrected Gaussian sigma value.
+spatiotemporal alignment; run the identical Omega × spatial-bank search and
+full xyz-sigma fit on it; report candidate and fitted-score tails at
+6–10; pick the lowest threshold whose estimated false-detection burden is
+acceptable after the full bank search. A maximized score is not an
+uncorrected Gaussian sigma. Cross-checks: score-stratified reconstruction
+pages; event-triggered averages by Omega row and pass; source/sigma/rho/
+boundary occupancy; time/channel recurrence and refractory-like lags;
+per-pass event rate and residual-energy removal.
 
-Cross-check the chosen threshold with:
-- score-stratified reconstruction pages;
-- event-triggered averages by Omega row and residual pass;
-- source, sigma, rho, and channel-boundary occupancy;
-- time/channel recurrence and refractory-like short-lag structure;
-- accepted event rate and residual-energy removal per pass.
+## Performance work (only after scientific acceptance)
 
-## Performance work after scientific acceptance
+Remove per-fit GPU→CPU geometry-key transfers via stable geometry IDs;
+benchmark fit batches 2,048/4,096/8,192 on identical inputs; overlap bounded
+CPU read/filter/CMR for chunk n+1 with GPU pursuit for chunk n using pinned
+buffers within one allocation; measure real GPU utilization, peak VRAM, host
+RSS, warmed chunk time. No artificial GPU-burn processes.
 
-Only after the score gate is selected:
-1. Remove per-fit GPU-to-CPU geometry-key transfers by assigning stable geometry
-   IDs before upload and reusing the existing GPU footprint cache.
-2. Benchmark fit batches 2,048, 4,096, 8,192 on identical inputs; promote only
-   exact, memory-safe settings.
-3. Overlap bounded CPU read/filter/CMR for chunk `n+1` with GPU pursuit for
-   chunk `n`, using pinned buffers within one GPU SLURM allocation.
-4. Measure real GPU utilization, peak VRAM, host RSS, warmed chunk time. No
-   artificial GPU-burn processes.
+## Promotion gate
 
-## Full-recording promotion gate
+No further promotion until the empirical null supports the chosen threshold,
+score-boundary examples look spike-like rather than selected noise, every
+accepted pass reduces residual energy, cross-pass recurrence stays zero by
+construction, the output schema and full plot suite pass, and the
+performance configuration sustains the allocation without host OOM or
+low-utilization termination.
 
-Do not promote the pipeline further until:
-- the empirical null supports the chosen projection threshold;
-- score-boundary examples look spike-like rather than selected noise;
-- every accepted pursuit pass reduces residual energy;
-- 0.5 ms/48 um cross-pass recurrence remains zero by construction;
-- output schema and the complete established plot suite pass;
-- the selected performance configuration sustains the allocation without host
-  OOM or low-utilization termination.
+## Plots added this session
+
+- `plot_temporal_codebook_depth_time_raster.py` now renders a true
+  rasterized Omega-colored scatter: fixed point size, per-point opacity
+  scaled by normalized `|alpha|`. (Two earlier render attempts, the binned
+  raster `16528417` and marker-area scatter `16528656`, were cancelled; the
+  opacity correction is ready but was never resubmitted.)
+- `plot_0014_full_recording_passes.py` replays each saved chunk on CUDA with
+  the exact saved `predictions`, pools each stage with a sign-preserving
+  temporal extremum, and renders 5×2: input plus the four residual passes on
+  the left, against an empty-then-cumulative opacity-weighted Omega scatter
+  on the right.
+- Job `16525720` (1m56s) regenerated reconstruction examples with
+  `--examples-per-pass 2` (8 columns) and added a codebook-usage plot, both
+  under `residuals/out/0014_xyzsig_full_score8/`.
+- New `plot_0014_codebook_usage.py` reads the 0014 schema (`omega.npy`,
+  `temporal_idx.npy`, `residual_pass.npy`) and renders each row as waveform
+  + overall usage + per-pass fraction. Score-8 usage: row 5 dominates
+  (24.34% overall, 25.7% P1 → 20.0% P4), row 1 second (22.43%); rows 6/7
+  grow with pass (row 7: 7.9% → 17.5%).
+
+## Spatial-spread hypothesis (yours)
+
+First-pass pursuit appears to force fitted sigma toward its lower bound.
+Treat this as a fitting pathology to test, not an established localization
+result. See `residuals/out/0014_xyzsig_full_score8/sigma_by_residual_pass.png`
+together with the per-chunk x/y/z-by-pass heatmaps before changing the
+spatial model or selection gate.
+
+## Housekeeping (2026-08-28)
+
+Top-level `runs/` and `out/` moved into `residuals/runs/` and
+`residuals/out/` (no name collisions; the 0014 outputs merged into the
+existing `residuals/runs/dataset1_p1/`). AGENTS.md documents the
+consolidation. The active 0014 sbatch scripts were updated to the new paths
+(`run_0014_xyzsig_full.sbatch`, `run_0014_xyzsig_full_score6.sbatch`,
+`run_0014_xyzsig_smoke.sbatch`, `run_0014_xyzsig_audit.sbatch`, both plot
+sbatch files); older legacy sbatch scripts still point at the old top-level
+paths and need the same fix before reuse.
 
 ## Links
 
 - [[session-014-xyzsigma-residual-pursuit]]
 - [[session-012-rho-implementation-plan]]
 - [[session-009-ibl-style-pursuit]]
-
-## Directory consolidation (2026-08-28, ~18:30)
-
-- Top-level `runs/` and `out/` were moved into `residuals/runs/` and
-  `residuals/out/` (no name collisions; `runs/dataset1_p1/0014_*` merged into
-  the existing `residuals/runs/dataset1_p1/`). AGENTS.md now documents that all
-  new outputs go under `residuals/`.
-- The active 0014 sbatch scripts were updated to `$ROOT/residuals/runs/...`:
-  `run_0014_xyzsig_full.sbatch`, `run_0014_xyzsig_full_score6.sbatch`,
-  `run_0014_xyzsig_smoke.sbatch`, `run_0014_xyzsig_audit.sbatch`, and the two
-  plot sbatch files. Other legacy sbatch scripts still point at the old
-  top-level paths and need the same fix before reuse.
-
-## Full-recording residual/raster plot (2026-08-28)
-
-- `plot_temporal_codebook_depth_time_raster.py` now renders a literal
-  rasterized Omega-coloured scatter plot, with fixed point size and each
-  point's transparency scaled by normalized `|alpha|`.
-- Added `plot_0014_full_recording_passes.py`: it replays each saved 0014 chunk
-  on CUDA using the exact saved `predictions` arrays, pools each stage with a
-  sign-preserving temporal extremum, and renders five rows × two columns:
-  input plus each of the four residual passes on the left, against an empty
-  then cumulative `|alpha|`-transparent Omega scatter plot on the right.
-- The binned-raster render `16528417` and the marker-area scatter retry
-  `16528656` were cancelled. The opacity-based scatter correction is ready but
-  has not been resubmitted.
-
-## Reconstruction + codebook plots (2026-08-28, ~18:20)
-
-- Job `16525720` (`plot-x8-full`, 1m56s) regenerated the reconstruction
-  examples with `--examples-per-pass 2` (8 columns: 2 per pass × 4 passes) and
-  added a new codebook usage plot. Both are under
-  `residuals/out/0014_xyzsig_full_score8/`.
-- `plot_raw_residual_reconstructions.py` gained `--examples-per-pass` (default
-  1, backward compatible); `choose_examples` now stratifies by input energy
-  into per-pass bands and picks the median captured-fraction fit in each.
-- New `residuals/src/plots/plot_0014_codebook_usage.py` reads the 0014 schema
-  (`omega.npy`, `temporal_idx.npy`, `residual_pass.npy`) and renders each
-  codebook row as waveform + overall usage fraction + per-pass fraction.
-  Score-8 usage: row 5 dominates (24.34% overall, 25.7% P1 → 20.0% P4), row 1
-  second (22.43%); rows 6/7 grow with pass (row 7: 7.9% P1 → 17.5% P4).
-
-## Spatial-spread diagnosis (2026-08-28)
-
-- Working hypothesis from the user: the first residual-pursuit pass is forcing
-  fitted spatial scale `sigma` toward its lower bound. Treat this as a fitting
-  pathology to test, not an established physical localization result.
-- The pass-wise sigma heatmap is at
-  `residuals/out/0014_xyzsig_full_score8/sigma_by_residual_pass.png`; inspect
-  it together with the per-chunk x/y/z-by-pass heatmaps before changing the
-  spatial model or selection gate.
-
-## Score-9 smoke comparison (2026-08-28)
-
-- Raised the coupled proposal and final fitted-projection thresholds from 8 to
-  9 in the 0014 defaults and smoke invocation. Audit retention coverage now
-  includes scores 9 and 10.
-- CUDA smoke `16529119` is submitted against the standard 10-second recording
-  window. Review its audit and plots before considering a score-9 full run.
-
-## Score-9 full recording (2026-08-28)
-
-- Full score-9 pursuit `16529272` is queued with four residual passes,
-  2,048-event fit batches, one-second chunks, USR1 checkpoint/requeue support,
-  and both proposal and fitted-projection thresholds fixed at 9. Output:
-  `residuals/runs/dataset1_p1/0014_xyzsig_full_score9/`.
-- Do not attach plots with an `afterok` dependency: requeues can make that
-  dependency unsatisfiable. After the full run has completed, submit the full
-  plot suite manually against the score-9 output.

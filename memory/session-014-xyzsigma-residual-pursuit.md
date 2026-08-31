@@ -1,122 +1,99 @@
-# Session 014: XYZ-Sigma Residual Pursuit
+# XYZ-Sigma Residual Pursuit (0014)
 **Created:** 2026-08-27
 **Last updated:** 2026-08-28
+**Status:** Done — validated through score-8; full runs handed to session 0015
 
-## Context
+## Why
 
-Replace the active rho-localization direction with a discrete `(x, y, z, sigma, q)` residual model. Reuse session 0012's GPU detection/codebook initialization and port fit-lattice's geometry-grouped assignment, but retain exactly one temporal codebook waveform and one gain per event.
+Replace the rho-localization direction with a discrete `(x, y, z, sigma, q)`
+residual model. Reuse 0012's GPU detection and codebook initialization, port
+fit-lattice's geometry-grouped assignment, but keep exactly one temporal
+codebook waveform and one gain per event.
 
-## Finalized plan
+## Design
 
-Create `residuals/src/preprocessing/0014_xyzsig_residual.py` as a resumable pipeline with `calibration-detect`, `alternating-fit`, `pursue`, and `all` stages.
+`residuals/src/preprocessing/0014_xyzsig_residual.py` is a resumable
+pipeline with `calibration-detect`, `alternating-fit`, `pursue`, and `all`
+stages:
 
-1. `calibration-detect` scans the complete requested recording with session 0012's detection/NMS behavior, then writes deterministic isolated-event keys and local geometry metadata. It samples across the whole recording with Q8 defaults: 100,000 events, 32 sampled chunks, 1 ms isolation, and a fixed seed.
-2. Initialize Omega using session 0012's existing one-waveform-per-event codebook procedure.
-3. `alternating-fit` streams the fixed calibration events without retaining all raw waveforms in memory. Group identical `(local_coords, mask)` configurations, cache their normalized `site × sigma` monopole dictionaries, and assign one stable `(x, y, z, sigma, q)` candidate per event. Refit every Omega row from its assigned events by the closed-form least-squares update, normalize it, retain the prior row if empty, and repeat to tolerance or iteration limit.
-4. Save learned `omega.npy`, assignment shards, objective history, row counts, footprint-cache diagnostics, and the complete stage configuration.
-5. `pursue` starts fresh from raw recording data with learned Omega frozen. Keep one-second chunks, four residual passes, GPU detection/subtraction, existing gates, and stable peak/subtraction ordering. Use discrete lattice fitting only: no rho and no continuous refinement.
+1. `calibration-detect` scans the whole requested recording with 0012's
+   detection/NMS behavior and writes deterministic isolated-event keys plus
+   local geometry metadata — 100,000 events over 32 sampled chunks, 1 ms
+   isolation, fixed seed, Q8 defaults.
+2. Omega initializes from 0012's one-waveform-per-event codebook procedure.
+3. `alternating-fit` streams calibration events without holding all raw
+   waveforms in memory: group identical `(local_coords, mask)` geometries,
+   cache their normalized `site × sigma` monopole dictionaries, assign one
+   stable `(x, y, z, sigma, q)` per event, refit each Omega row by
+   closed-form least squares over its assigned events, normalize, keep the
+   prior row if empty, and repeat to tolerance or iteration limit.
+4. Saves learned `omega.npy`, assignment shards, objective history, row
+   counts, cache diagnostics, and the full stage configuration.
+5. `pursue` starts fresh from the raw recording with Omega frozen:
+   one-second chunks, four residual passes, GPU detection/subtraction,
+   existing gates, and discrete lattice fitting only — no rho, no continuous
+   refinement.
 
-## Invariants and batching
+Invariants: reconstruction is `alpha * monopole(x,y,z,sigma) * Omega[q]`;
+`rho = sqrt(z² + sigma²)` is saved as a diagnostic only, since z and sigma
+are deterministic grid selections, not separately identifiable physical
+estimates. Strict `>` candidate/tie behavior with original event order
+restored after grouped scoring. Default final fits of 2,048 events (benchmark
+4,096/8,192 on identical inputs before promoting anything memory-safe). Do
+not reuse 0013's rho path or fit_lattice's rank-Q temporal mixtures — port
+only the geometry caching and GEMM-style discrete assignment design.
 
-- Reconstruction is `alpha * monopole(x, y, z, sigma) * Omega[q]`: one codebook row and scalar gain per event.
-- Save `rho = sqrt(z^2 + sigma^2)` only as a diagnostic. The discrete `z` and `sigma` labels are deterministic dictionary selections, not separately identifiable physical estimates.
-- Preserve strict `>` candidate/tie behavior and restore original event order after grouped scoring.
-- Default final-pursuit fits to 2,048 events. Benchmark 4,096 and 8,192 on identical inputs, then promote only an exact, memory-safe batch size while retaining one-second residual state.
-- Do not reuse session 0013's rho path or `fit_lattice.py`'s rank-Q temporal mixtures. Port only its geometry caching and GEMM-style discrete assignment design.
+## What the smokes found and fixed
 
-## Validation and promotion
+- Initial CUDA smoke `16500465` hit an undefined `positions` reference in
+  calibration; `16501772` then stopped on the pre-existing partial output.
+  Fixed both (channel count now from `fit_ids`; smoke outputs job-specific).
+- All-stage smoke `16501854` (3m09s over 10 s of recording) proved the whole
+  chain on CUDA: calibration, alternating fit, cached discrete localization,
+  subtraction, rollback, chunk checkpointing. Its score-6 + 5%-capture
+  selection saved 526,688 events and kept rolling back the last pass.
+- Audit `16502593` confirmed the saved arithmetic (2.24e-7 max
+  captured-fraction error) but showed the 5% captured fraction is a poor
+  spike/noise discriminator: its denominator includes hundreds of noise
+  degrees of freedom. Median accepted capture was ~12% with post-fit
+  channel RMSE near one noise unit.
+- The real defects were a missing final-fit projection gate and no
+  cross-pass lockout: 9.1% of saved fits scored below the proposal threshold
+  of 6, and 77.8% / 93.1% of pass-2 / pass-3 events sat within 0.5 ms/96 µm
+  of an earlier event (essentially all within the full 3 ms support).
+- Fixes: require `sqrt(captured_energy) >= min_fitted_projection`, carry the
+  0.5 ms/48 µm NMS exclusion across residual passes, and demote captured
+  fraction to a diagnostic (`min_captured_fraction=0`). Atom model, Q8
+  codebook, discrete lattice, sigma bank, and the one-gain invariant
+  unchanged.
+- Corrected score-6 smoke `16502643` (3m44s, 356,315 events) decayed cleanly
+  (~21k / 10k / 3k / <1k accepted per pass per chunk) with positive energy
+  drops on every pass; audit `16502874` confirmed zero later-pass events
+  within 0.5 ms/48 µm and a minimum saved score of exactly 6; plot suite
+  `16502893` completed. (An earlier waveform-saving smoke `16502038` and its
+  plot job `16502115` established the output schema and eight-figure suite;
+  the spiketensor-panel loader bug found there was repaired.)
 
-- Synthetic exact reconstruction, boundary/mask cases, and candidate-tie tests.
-- Bitwise grouped-versus-uncached assignment/prediction comparison.
-- Non-increasing alternating-fit objective; empty codebook rows remain unchanged.
-- Fixed-input 2,048/4,096/8,192 GPU timing, peak-memory, and utilization comparison.
-- Short CUDA all-stage smoke, then one-second fresh-pursuit smoke with finite output, valid checkpoints, stable pass order, and positive accepted-pass energy reduction.
-- Do not submit a full-recording session-0014 run until those checks pass.
+## Score-8 validation
 
-## Progress (2026-08-27)
+Because maximizing over time, channels, Q8, nine scales, and the xyz lattice
+creates a large multiple-comparisons tail, defaults moved to proposal
+threshold 8 and final fitted-projection threshold 8. The score-8 chain
+completed cleanly: smoke `16503279` (2m56s), audit `16503283` (7s),
+eight-panel plots `16503486` (1m22s). The 10-second run saved 202,654 events
+(43.1% fewer than corrected score 6), with every residual pass accepted and
+positive energy reduction; fitted scores on audit chunk 0 ranged 8.00029 to
+101.22 (median 10.44), and cross-pass lockout stayed exact. The
+score-boundary examples in the plots were never scientifically reviewed —
+that is where session 0015 picks up.
 
-- Added `residuals/src/preprocessing/0014_xyzsig_residual.py` as the new
-  stage-driven entry point. It has deterministic calibration detection shards,
-  geometry-keyed cached coarse `(x, y, z, sigma, q)` assignment, closed-form
-  one-row codebook updates, iteration assignment shards, resume metadata, and
-  one-second frozen-codebook pursuit that routes session-0012 detection and
-  subtraction through the grouped localizer.
-- The Singularity `py_compile` check passed. No CUDA smoke or full-recording
-  run has been submitted; those remain required before promotion.
+## Status at handoff
 
-## CUDA validation and selection repair (2026-08-28)
-
-- Initial CUDA smoke `16500465` exposed an undefined `positions` reference in
-  calibration; `16501772` then stopped at the pre-existing partial output.
-  Calibration now obtains the channel count from `fit_ids`, and smoke outputs
-  are job-specific.
-- All-stage smoke `16501854` completed in 3m09s over 10 seconds of recording,
-  proving calibration, alternating fitting, cached discrete localization,
-  subtraction, rollback, and chunk checkpointing on CUDA. Its original
-  score-6/5%-capture selection saved 526,688 events and repeatedly rolled back
-  the last residual pass.
-- 0014 now emits the established residual-run schema: complete config and
-  metadata, channel/neighborhood artifacts, root `omega.npy`, legacy event
-  names including `local_coords`, `profile_idx`, and `temporal_idx`, bounded
-  memmap consolidation, and `residual_waveforms` by default. Delta-chi-squared
-  is intentionally absent. The established plot suite consumes the output.
-- Waveform-saving smoke `16502038` completed in 4m36s with 542,894 events.
-  Plot job `16502115` produced the main suite before its final spiketensor panel
-  hit a non-event-array indexing assumption; that loader was repaired and all
-  eight figures were produced under `out/0014_xyzsig_smoke_16502038/`.
-- Audit `16502593` verified saved reconstruction arithmetic to `2.24e-7`
-  maximum captured-fraction error. The 5% captured fraction was not a useful
-  spike/noise discriminator because it divides explained atom energy by the
-  full multi-channel waveform energy, including hundreds of noise degrees of
-  freedom. Median accepted capture was about 12%, while post-fit normalized
-  channel RMSE was near one noise unit.
-- The actual selection defects were a missing final-fit projection gate and no
-  cross-pass lockout. In the old run, 9.1% of saved fits had final projection
-  score below the proposal threshold of 6; 77.8% of pass-2 and 93.1% of pass-3
-  events were within 0.5 ms/96 um of an earlier event, and essentially all were
-  within the full 3 ms support.
-- 0014 now requires `sqrt(captured_energy) >= min_fitted_projection`, carries
-  the existing 0.5 ms/48 um NMS exclusion across residual passes, and treats
-  captured fraction as a diagnostic (`min_captured_fraction=0`). The atom model,
-  Q8 codebook, discrete lattice, sigma bank, and one-gain invariant are unchanged.
-- Corrected score-6 smoke `16502643` completed in 3m44s with 356,315 events.
-  Accepted counts decayed cleanly by pass (roughly 21k, 10k, 3k, and <1k per
-  one-second chunk), and every pass produced a positive residual-energy drop.
-  Audit `16502874` confirmed zero later-pass events within 0.5 ms/48 um of an
-  earlier event and a minimum saved fitted projection score of exactly 6.
-  Plot suite `16502893` completed successfully under
-  `out/0014_xyzsig_smoke_16502643/`.
-- Because maximizing over time, channels, Q8, nine scales, and the xyz lattice
-  creates a substantial multiple-comparisons tail, the conservative current
-  defaults are proposal threshold 8 and final fitted-projection threshold 8.
-  Score-8 smoke `16503279` is running; dependent audit `16503283` and plot suite
-  `16503486` are queued.
-
-## Score-8 validation resolved (2026-08-28)
-
-- The score-8 chain completed cleanly: CUDA smoke `16503279` (2m56s), audit
-  `16503283` (7s), and the full eight-panel plot suite `16503486` (1m22s).
-  The run is at `runs/dataset1_p1/0014_xyzsig_smoke_16503279/` and its figures
-  are at `out/0014_xyzsig_smoke_16503279/`.
-- The 10-second score-8 run saved 202,654 events (43.1% fewer than the
-  corrected score-6 run's 356,315), with every residual pass accepted and
-  producing a positive energy reduction. On audit chunk 0, the saved fitted
-  projection score ranged from 8.00029 to 101.22 (median 10.44), and direct
-  captured-fraction reconstruction agreed to 1.91e-7 maximum absolute error.
-- Cross-pass lockout remained exact: no pass-2/3/4 event lay within
-  0.5 ms/48 um of an earlier event. The generated plot suite includes the
-  score-boundary data but those examples have not yet been scientifically
-  reviewed.
-
-## Current promotion status
-
-- CUDA execution, resumability, output compatibility, arithmetic consistency,
-  cross-pass duplicate suppression, and positive pass-wise energy reduction
-  have passed short-run validation.
-- A full-recording run is still blocked on reviewing score-boundary examples
-  against score 6 and calibrating the detection threshold against an empirical
-  noise/null control.
-- Continue in [[session-015-score-calibrated-xyzsigma-promotion]].
+CUDA execution, resumability, output compatibility, arithmetic consistency,
+cross-pass duplicate suppression, and positive pass-wise energy reduction
+all passed short-run validation. Full-recording runs were gated on
+score-boundary review and empirical-null calibration; see
+[[session-015-score-calibrated-xyzsigma-promotion]].
 
 ## Links
 
