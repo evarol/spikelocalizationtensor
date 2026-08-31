@@ -620,8 +620,11 @@ def pursue(
                 with np.load(path, allow_pickle=False) as archive:
                     visit_accepted = int(len(archive["spike_times"]))
                 pass_accepted += visit_accepted
-            else:
-                core_stop = min(core_start + chunk_samples, stop)
+                visited += 1
+                if not visit_accepted:
+                    exhausted.add(number)
+                continue
+            core_stop = min(core_start + chunk_samples, stop)
             read_start = max(0, core_start - margin)
             read_stop = min(reader.ns, core_stop + margin)
             data = BASE.preprocess_voltage(
