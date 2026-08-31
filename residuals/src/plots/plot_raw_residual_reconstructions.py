@@ -33,6 +33,8 @@ def resolve_plot_config(metadata):
 
 def load_chunk(run, chunk_index):
     path = run / "chunks" / f"chunk_{chunk_index:06d}.npz"
+    if not path.exists():
+        path = sorted(run.glob("pass_*/chunk_*.npz"))[chunk_index] if list(run.glob("pass_*/chunk_*.npz")) else path
     required = {
         "residual_waveforms",
         "local_coords",

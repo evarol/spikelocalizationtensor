@@ -177,7 +177,7 @@ def load_round_summaries(run):
     summaries = []
     terminal = []
     stopping_reasons = Counter()
-    for path in sorted((run / "chunks").glob("chunk_*.npz")):
+    for path in sorted((run / "chunks").glob("chunk_*.npz")) or sorted(run.glob("pass_*/chunk_*.npz")):
         with np.load(path, allow_pickle=False) as archive:
             chunk_summaries = json.loads(str(archive["pass_summaries_json"].item()))
             stopping_reason = str(archive["stopping_reason"].item())
@@ -740,6 +740,8 @@ def plot_reconstruction_grid(values, output, title):
 
 def plot_reconstruction_examples(run, output, chunk_index=0, count=6):
     path = run / "chunks" / f"chunk_{chunk_index:06d}.npz"
+    if not path.exists():
+        path = sorted(run.glob("pass_*/chunk_*.npz"))[chunk_index]
     fields = (
         "spike_times",
         "residual_waveforms",

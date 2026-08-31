@@ -42,7 +42,8 @@ def colour_raster(x, y, label, palette, xlim, ylim, nx, ny):
 
 
 def load_examples(run, count=4):
-    path = sorted((run / "chunks").glob("chunk_*.npz"))[0]
+    paths = sorted((run / "chunks").glob("chunk_*.npz")) or sorted(run.glob("pass_*/chunk_*.npz"))
+    path = paths[0]
     with np.load(path, allow_pickle=False) as archive:
         rows = np.argsort(archive["input_energy"])[-count:]
         event_count = len(archive["spike_times"])
