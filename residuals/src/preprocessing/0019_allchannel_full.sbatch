@@ -55,7 +55,7 @@ singularity exec --nv --overlay /scratch/${USER}/_ENVS/ibl-sorter.ext3:ro \
             --peeling-rounds 1 \
             --recording-passes 3 \
             --spatial-score mean-channel-rmse \
-            --all-channel-improvement true \
+            --all-channel-improvement \
             --all-channel-min-fraction 0.2 \
             --pass-fraction-step 0.1 \
             --pass-stop-min-events 1000 \

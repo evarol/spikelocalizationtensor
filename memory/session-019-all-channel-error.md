@@ -1,7 +1,7 @@
 # All-Channel-Error Peeling (0019)
 **Created:** 2026-08-30
-**Last updated:** 2026-08-30
-**Status:** Implemented and validated (CPU self-test + synthetic smoke); full run not yet queued
+**Last updated:** 2026-08-31
+**Status:** Implemented, validated, queued — full run `16655016` running; plot suite `16655046` HELD
 
 ## Context
 
@@ -67,9 +67,22 @@ enforces it.
 
 - [x] Implement all-channel criterion, pass loop, GPU replay, rejection log.
 - [x] Validate: py_compile, bash -n, self-test (CPU), synthetic smoke.
-- [ ] Queue the full 0019 run + dependent plot suite (SLURM, outside sandbox).
+- [x] Queue the full 0019 run + dependent plot suite (SLURM, outside sandbox).
 - [ ] After completion: check rejected-reason histogram, sigma usage (did the
   sigma-2 cheat die?), per-pass event counts, and per-channel fractions.
+
+## Queue history
+
+- First full job `16654819` FAILED after 42 s (exit 2): the sbatch passed
+  `--all-channel-improvement true`, but the flag is argparse store_true, so
+  `true` was an unrecognized positional. Fixed the sbatch to the bare flag
+  and re-verified the self-test. Its dependent plot job `16654823` died with
+  DependencyNeverSatisfied and was canceled.
+- Resubmitted full job `16655016` (same run output; `--resume` safe because
+  the failed run wrote no chunks).
+- Plot suite `16655046` submitted on `afterok:16655016` and is HELD by user
+  instruction — release manually with `scontrol release 16655046` after the
+  run is reviewed.
 
 ## Links
 
