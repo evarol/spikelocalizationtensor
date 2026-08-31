@@ -1,7 +1,7 @@
 # All-Channel-Error Peeling (0019)
 **Created:** 2026-08-30
 **Last updated:** 2026-08-31
-**Status:** fraction20 run `16655016` complete (568,888 events) and plotted; 5% run resumed as `16678849` — passes 0 (1.10M events) and 1 (2,557) done, pass 2 pending on productive chunks; 10% middle-ground run `16679282` queued behind it, plots `16679287` dependent
+**Status:** fraction20 run `16655016` complete (568,888 events) and plotted; 5% run resumed as `16679719` (passes 0–1 done), 10% middle-ground run `16679743` queued, plot suites `16679742`/`16679749` dependent
 
 ## Why 0019 exists
 
@@ -184,6 +184,17 @@ unchanged, into
 It is job `16679282` with plot suite `16679287` dependent, queued behind the
 5% resume on GPU quota. The fraction sweep is now 5% (`16678849`), 10%
 (`16679282`), and 20% (`16655016`) at otherwise identical settings.
+
+The exhaustion loop's first version crashed on resume (`16678849` died after
+65 s): the resumed-chunk branch read the saved event count but fell through to
+the compute tail without `core_stop` bound. The fix (`8be20df`) gives resumed
+chunks their own `continue` after counting the visit and applying exhaustion
+marking, so a resumed zero-event chunk also exhausts. The 10% attempt
+`16679282` was cancelled one minute in for running the unfixed module (a
+requeue would have crash-looped it) and resubmitted. Working tree fully
+committed through `8be20df`; the fraction sweep now runs as 5% `16679719`
+(resume; passes 0–1 kept), 10% `16679743` (fresh), with plot suites `16679742`
+and `16679749` dependent.
 
 ## Next steps
 
