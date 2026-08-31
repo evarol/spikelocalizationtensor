@@ -42,11 +42,14 @@ singularity exec --overlay /scratch/${USER}/_ENVS/ibl-sorter.ext3:ro \
         export PYTHONPATH=$PWD/residuals/src:$PWD/residuals/src/plots
         python -m py_compile \
             residuals/src/plots/0016_onehot_lattice_plots.py \
+            residuals/src/plots/plot_0014_codebook_usage.py \
             residuals/src/plots/plot_raw_residual_reconstructions.py \
             residuals/src/plots/plot_spiketensor_residual_pursuit.py \
             residuals/src/plots/plot_temporal_codebook_depth_time_raster.py
         python residuals/src/plots/0016_onehot_lattice_plots.py \
             --run "$1" --out "$2"
+        python residuals/src/plots/plot_0014_codebook_usage.py \
+            --run "$1" --out "$2/temporal_codebook_usage.png"
         python residuals/src/plots/plot_raw_residual_reconstructions.py \
             --run "$1" --out "$2/reconstructions" --chunk-index 0 \
             --max-examples 6

@@ -9,6 +9,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from matplotlib.colors import BoundaryNorm, ListedColormap
 import numpy as np
+from scipy.ndimage import gaussian_filter
 
 
 BACKGROUND = "#0d0d0d"
@@ -16,10 +17,26 @@ FONT = "#d7d7d7"
 GRID = "#292929"
 
 
-def amplitude_opacity(weights, maximum):
-    positive = weights[weights > 0]
-    scale = float(np.quantile(positive, 0.98)) if len(positive) else 1.0
-    return np.clip(maximum * weights / max(scale, np.finfo(np.float32).tiny), 0.02, maximum)
+BACKGROUND_RGB = np.asarray((0.05, 0.05, 0.05), dtype=np.float32)
+
+
+def colour_raster(x, y, label, palette, xlim, ylim, nx, ny):
+    """Bin categorical events, smooth their mass, and composite their colours."""
+    ix = np.floor((x - xlim[0]) * nx / (xlim[1] - xlim[0])).astype(np.int64)
+    iy = np.floor((y - ylim[0]) * ny / (ylim[1] - ylim[0])).astype(np.int64)
+    keep = (ix >= 0) & (ix < nx) & (iy >= 0) & (iy < ny)
+    flat = iy[keep] * nx + ix[keep]
+    count = np.bincount(flat, minlength=nx * ny).reshape(ny, nx).astype(np.float32)
+    rgb = np.zeros((ny, nx, 3), dtype=np.float32)
+    for channel in range(3):
+        rgb[..., channel] = np.bincount(
+            flat, weights=palette[label[keep], channel], minlength=nx * ny
+        ).reshape(ny, nx)
+    mass = gaussian_filter(count, 0.5)
+    for channel in range(3):
+        rgb[..., channel] = gaussian_filter(rgb[..., channel], 0.5) / np.maximum(mass, 1e-6)
+    intensity = np.clip(1.35 * (1 - np.exp(-mass / 1.4)), 0, 1)
+    return BACKGROUND_RGB * (1 - intensity[..., None]) + rgb * intensity[..., None]
 
 
 def main():
@@ -29,7 +46,11 @@ def main():
     parser.add_argument("--run", type=Path)
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--sampling-frequency", type=float, default=30_000.0)
+    # Retained for compatibility with older batch scripts; categorical rasters
+    # always bin all finite events.
     parser.add_argument("--max-points", type=int, default=0)
+    # Retained for compatibility with older batch scripts; categorical rasters
+    # no longer use point size or amplitude opacity.
     parser.add_argument("--marker-size", type=float, default=0.25)
     parser.add_argument("--alpha", type=float, default=0.42)
     parser.add_argument("--seed", type=int, default=23)
@@ -45,12 +66,6 @@ def main():
         raise FileExistsError(f"refusing to overwrite {args.out}")
     if args.sampling_frequency <= 0:
         raise ValueError("sampling frequency must be positive")
-    if args.max_points < 0:
-        raise ValueError("max points must be nonnegative")
-    if args.marker_size <= 0:
-        raise ValueError("marker size must be positive")
-    if not 0 < args.alpha <= 1:
-        raise ValueError("alpha must lie in (0, 1]")
 
     if args.run is None:
         spike_times = np.load(args.session / "spike_times.npy", mmap_mode="r")
@@ -94,15 +109,6 @@ def main():
     )
     finite = np.isfinite(time_minutes) & np.isfinite(depth)
     rows = np.flatnonzero(finite)
-    if args.max_points and len(rows) > args.max_points:
-        rng = np.random.default_rng(args.seed)
-        rows = np.sort(rng.choice(rows, args.max_points, replace=False))
-    amplitude = np.abs(np.asarray(alpha, dtype=np.float64))
-    amplitude = np.where(np.isfinite(amplitude), amplitude, 0.0)
-    positive = amplitude[amplitude > 0]
-    amplitude_scale = float(np.median(positive)) if len(positive) else 1.0
-    weights = (amplitude / max(amplitude_scale, np.finfo(np.float64).tiny)).astype(np.float32)
-
     rgb = plt.colormaps["rainbow"](
         np.linspace(0.0, 1.0, len(omega))
     )[:, :3]
@@ -113,22 +119,25 @@ def main():
     figure, axis = plt.subplots(
         figsize=(15, 7.5), constrained_layout=True, facecolor=BACKGROUND
     )
-    colors = colormap(normalization(temporal_idx[rows]))
-    colors[:, 3] = amplitude_opacity(weights[rows], args.alpha)
-    axis.scatter(
-        time_minutes[rows], depth[rows], c=colors, marker=".",
-        s=args.marker_size, linewidths=0, rasterized=True,
+    depth_low, depth_high = np.quantile(depth[finite], (0.002, 0.998))
+    x_high = max(float(time_minutes[finite].max()), 1e-9)
+    image = colour_raster(
+        time_minutes[rows], depth[rows], temporal_idx[rows], rgb,
+        (0.0, x_high), (depth_low, depth_high), 1750, 960,
+    )
+    axis.imshow(
+        image, origin="lower", extent=(0.0, x_high, depth_low, depth_high),
+        aspect="auto", interpolation="nearest",
     )
     axis.set(
         xlabel="recording time (min)",
         ylabel="probe depth (µm)",
         title=(
             f"Q={len(omega)} temporal-codebook selections · "
-            f"|α|-weighted density · {len(rows):,} / {event_count:,} spikes displayed"
+            f"categorical density · {len(rows):,} finite spikes"
         ),
     )
-    axis.set_xlim(0.0, max(float(time_minutes[finite].max()), 1e-9))
-    depth_low, depth_high = np.quantile(depth[finite], (0.002, 0.998))
+    axis.set_xlim(0.0, x_high)
     axis.set_ylim(depth_low, depth_high)
     axis.set_facecolor(BACKGROUND)
     axis.grid(color=GRID, alpha=0.8, linewidth=0.45)
@@ -160,7 +169,7 @@ def main():
     plt.close(figure)
     print(
         f"wrote {args.out} with {len(rows):,}/{event_count:,} spikes, "
-        f"median |alpha|={amplitude_scale:.3e}, and {len(omega)} linspaced RGB colors",
+        f"1750x960 smoothed categorical bins, and {len(omega)} linspaced RGB colors",
         flush=True,
     )
 
