@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH --job-name=allchannel0019-full
+#SBATCH --job-name=allchannel0019-frac5
 #SBATCH --output=/scratch/ap7151/iclr-paper/varol-version/residuals/slurm_logs/%x_%j.out
 #SBATCH --error=/scratch/ap7151/iclr-paper/varol-version/residuals/slurm_logs/%x_%j.err
 #SBATCH --time=24:00:00
@@ -17,7 +17,7 @@ set -euo pipefail
 
 PROJECT_ROOT=/scratch/ap7151/iclr-paper/varol-version
 RECORDING_PATH=/scratch/ap7151/_RAW_DATA/extra-motion/dataset1_p1/p1_g0_t0.imec0.ap.bin
-RUN_OUTPUT=$PROJECT_ROOT/residuals/runs/dataset1_p1/0019_allchannel_pass3_round1_fraction20_step10_fitted8
+RUN_OUTPUT=$PROJECT_ROOT/residuals/runs/dataset1_p1/0019_allchannel_pass3_round1_fraction5_step10_fitted8
 CHILD_PID=
 
 handle_usr1() {
@@ -38,7 +38,7 @@ if [[ ! -e "$RECORDING_PATH" ]]; then
 fi
 
 cd "$PROJECT_ROOT"
-echo "full-recording 0019 all-channel pass pursuit: $RUN_OUTPUT"
+echo "full-recording 0019 all-channel pass pursuit (5% bar): $RUN_OUTPUT"
 
 singularity exec --nv --overlay /scratch/${USER}/_ENVS/ibl-sorter.ext3:ro \
     /share/apps/images/cuda12.8.1-cudnn9.8.0-ubuntu24.04.2.sif \
@@ -56,7 +56,7 @@ singularity exec --nv --overlay /scratch/${USER}/_ENVS/ibl-sorter.ext3:ro \
             --recording-passes 3 \
             --spatial-score mean-channel-rmse \
             --all-channel-improvement \
-            --all-channel-min-fraction 0.2 \
+            --all-channel-min-fraction 0.05 \
             --pass-fraction-step 0.1 \
             --event-merge-ms 0.5 \
             --max-channel-normalized-rmse 3 \

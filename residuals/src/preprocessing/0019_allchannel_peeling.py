@@ -14,9 +14,12 @@ two-prototype cone codebook. Two things change:
 Structure: the recording is walked `recording_passes` times. Each chunk visit runs
 `peeling_rounds` (default 1) detect-fit-subtract rounds. Passes 2+ rebuild each chunk's
 starting residual on the GPU by replaying every saved event from earlier passes onto
-the raw chunk, so the loop continues exactly where the last pass ended. Every detected
-candidate that is not accepted is logged with a reason bitmask; nothing is silently
-discarded.
+the raw chunk, so the loop continues exactly where the last pass ended. A chunk visit
+that accepts no events marks the chunk exhausted, and later passes skip it: its interior
+residual is unchanged and the acceptance bar only escalates, so re-detection could only
+reproduce the same rejected proposals. Every detected
+candidate that is not accepted is logged with a reason bitmask and the rejected/rollback
+audit tables are consolidated per pass and at the run root; nothing is silently discarded.
 """
 
 import importlib.util
@@ -60,7 +63,6 @@ class Config(PIPELINE.Config):
     all_channel_improvement: bool = True
     all_channel_min_fraction: float = 0.2
     pass_fraction_step: float = 0.1
-    pass_stop_min_events: int = 1000
     log_rejections: bool = True
 
 
@@ -132,6 +134,10 @@ def output_metadata(config, recording_path, fs, n_channels, first, stop):
         "duplicate_prior": (
             "pass 2+ preloads the chunk-local duplicate prior with the replayed "
             "earlier-pass events"
+        ),
+        "chunk_exhaustion": (
+            "a chunk visit that accepts no events marks the chunk exhausted; later "
+            "passes skip exhausted chunks instead of re-detecting an unchanged interior"
         ),
         "rejection_logging": bool(config.log_rejections),
     }
@@ -345,7 +351,7 @@ def concatenate_parts(parts, width, waveform_length, save_waveforms):
 
 
 def _consolidate(chunk_paths, out_dir):
-    """Event-aligned fields only: rejected_* audit tables stay sharded per chunk."""
+    """Consolidate event fields and the rejected/rollback audit; nothing stays sharded-only."""
     paths = sorted(chunk_paths)
     if not paths:
         raise RuntimeError("no completed chunks")
@@ -356,14 +362,21 @@ def _consolidate(chunk_paths, out_dir):
             and not key.startswith("rejected_")
             and archive[key].ndim
         ]
-    total = 0
+        rejected_fields = [
+            key for key, _ in _REJECTED_FIELDS if key in archive.files
+        ]
+    event_total = 0
+    rejected_total = 0
     for path in paths:
         with np.load(path, allow_pickle=False) as archive:
-            total += len(archive["spike_times"])
-            if any(key not in archive.files for key in fields):
+            event_total += len(archive["spike_times"])
+            rejected_total += len(archive["rejected_reason"])
+            if any(key not in archive.files for key in fields + rejected_fields):
                 raise RuntimeError(f"incompatible chunk schema: {path}")
     arrays = {}
+    rejected_arrays = {}
     cursor = 0
+    rejected_cursor = 0
     for path in paths:
         with np.load(path, allow_pickle=False) as archive:
             count = len(archive["spike_times"])
@@ -374,13 +387,50 @@ def _consolidate(chunk_paths, out_dir):
                 if key not in arrays:
                     arrays[key] = np.lib.format.open_memmap(
                         Path(out_dir) / f"{key}.npy", mode="w+", dtype=value.dtype,
-                        shape=(total, *value.shape[1:]),
+                        shape=(event_total, *value.shape[1:]),
                     )
                 arrays[key][cursor:cursor + count] = value
+            rejected_count = len(archive["rejected_reason"])
+            for key in rejected_fields:
+                value = archive[key]
+                if value.shape[0] != rejected_count:
+                    raise RuntimeError(f"{path}:{key} is not rejection-aligned")
+                if key not in rejected_arrays:
+                    rejected_arrays[key] = np.lib.format.open_memmap(
+                        Path(out_dir) / f"{key}.npy", mode="w+",
+                        dtype=value.dtype,
+                        shape=(rejected_total, *value.shape[1:]),
+                    )
+                rejected_arrays[key][rejected_cursor:rejected_cursor + rejected_count] = value
             cursor += count
-    for array in arrays.values():
+            rejected_cursor += rejected_count
+    for array in list(arrays.values()) + list(rejected_arrays.values()):
         array.flush()
-    return {"n_events": total, "n_chunks": len(paths), "waveforms": "sharded in chunks"}
+    return {
+        "n_events": cursor,
+        "n_rejected": rejected_total,
+        "n_chunks": len(paths),
+        "waveforms": "sharded in chunks",
+    }
+
+
+def exhausted_chunks(output, completed_passes, total_chunks):
+    """Chunks whose most recent completed visit accepted nothing, plus never-visited ones.
+
+    A chunk absent from the last completed pass directory was skipped there and stays
+    exhausted; a chunk present with zero accepted events just exhausted itself. Chunks
+    missing from earlier passes were already skipped, so only the last pass matters.
+    """
+    if completed_passes <= 0:
+        return set()
+    last_dir = Path(output) / f"pass_{completed_passes - 1:02d}"
+    exhausted = set(range(total_chunks))
+    for path in last_dir.glob("chunk_*.npz"):
+        number = int(path.stem.split("_")[1])
+        with np.load(path, allow_pickle=False) as archive:
+            if len(archive["spike_times"]):
+                exhausted.discard(number)
+    return exhausted
 
 
 def load_prior_events(output, pass_index, fit_ids, fit_offsets, n_channels, device):
@@ -543,10 +593,14 @@ def pursue(
         and (output / f"pass_{completed:02d}" / "consolidation.json").exists()
     ):
         completed += 1
+    exhausted = exhausted_chunks(output, completed, len(starts))
     stopping_reason = "all_passes_complete"
     for pass_index in range(completed, config.recording_passes):
         if stopped_after is not None and pass_index > stopped_after:
             stopping_reason = f"stopped_after_pass_{stopped_after}"
+            break
+        if len(exhausted) >= len(starts):
+            stopping_reason = "all_chunks_exhausted"
             break
         pass_dir = output / f"pass_{pass_index:02d}"
         pass_dir.mkdir(exist_ok=True)
@@ -557,13 +611,17 @@ def pursue(
             if pass_index else None
         )
         pass_accepted = 0
+        visited = 0
         for number, core_start in enumerate(starts):
+            if number in exhausted:
+                continue
             path = pass_dir / f"chunk_{number:06d}.npz"
             if resume and path.exists():
                 with np.load(path, allow_pickle=False) as archive:
-                    pass_accepted += int(len(archive["spike_times"]))
-                continue
-            core_stop = min(core_start + chunk_samples, stop)
+                    visit_accepted = int(len(archive["spike_times"]))
+                pass_accepted += visit_accepted
+            else:
+                core_stop = min(core_start + chunk_samples, stop)
             read_start = max(0, core_start - margin)
             read_stop = min(reader.ns, core_stop + margin)
             data = BASE.preprocess_voltage(
@@ -632,33 +690,37 @@ def pursue(
                     json.dumps(null_shifts.tolist())
                 )
             OLD.atomic_npz(path, result)
-            pass_accepted += int(len(anchors))
+            visit_accepted = int(len(anchors))
+            pass_accepted += visit_accepted
             print(
                 f"pass {pass_index} chunk {number + 1}/{len(starts)} "
                 f"events={len(anchors)}",
                 flush=True,
             )
+            if not visit_accepted:
+                exhausted.add(number)
+            visited += 1
         pass_summary = _consolidate(pass_dir.glob("chunk_*.npz"), pass_dir)
         OLD.atomic_json(pass_dir / "consolidation.json", pass_summary)
         entry = {
             "recording_pass": pass_index,
             "n_events": pass_summary["n_events"],
+            "n_rejected": pass_summary["n_rejected"],
             "n_chunks": pass_summary["n_chunks"],
+            "n_chunks_visited": visited,
+            "n_chunks_exhausted": len(exhausted),
             "accepted": pass_accepted,
             "channel_fraction": pass_all_channel_fraction(config, pass_index),
         }
-        if pass_index and pass_accepted < config.pass_stop_min_events:
-            entry["stopped"] = True
-            stopping_reason = f"pass_{pass_index}_below_floor"
         summaries.append(entry)
         OLD.atomic_json(summaries_path, summaries)
         print(
             f"pass {pass_index}: accepted {pass_accepted} events, "
-            f"per-channel bar {entry['channel_fraction']:.2f}",
+            f"per-channel bar {entry['channel_fraction']:.2f}, "
+            f"visited {visited}/{len(starts)} chunks, "
+            f"{len(exhausted)} exhausted",
             flush=True,
         )
-        if entry.get("stopped"):
-            break
     chunk_paths = sorted(
         path
         for pass_dir in sorted(output.glob("pass_*"))
@@ -668,6 +730,7 @@ def pursue(
     total = _consolidate(chunk_paths, output)
     summary = {
         "n_events": total["n_events"],
+        "n_rejected": total["n_rejected"],
         "n_chunks": total["n_chunks"],
         "recording_passes": config.recording_passes,
         "peeling_rounds_per_chunk": config.peeling_rounds,
@@ -1720,8 +1783,6 @@ def validate_config(config):
         raise ValueError("the all-channel fraction must be strictly inside (0, 1)")
     if config.pass_fraction_step < 0:
         raise ValueError("the pass fraction step must be nonnegative")
-    if config.pass_stop_min_events < 0:
-        raise ValueError("the pass stop floor must be nonnegative")
 
 
 def self_test(device):
@@ -1820,6 +1881,36 @@ def self_test(device):
         raise AssertionError("replay lost a prior-pass event")
     if duplicates[0].tolist() != [10] or duplicates[1].tolist() != [0]:
         raise AssertionError("replay duplicate records are incorrect")
+
+    import shutil
+    import tempfile
+
+    scratch = Path(tempfile.mkdtemp())
+    try:
+        for name in ("pass_00", "pass_01"):
+            (scratch / name).mkdir(parents=True)
+
+        def write_chunk(pass_name, number, events):
+            OLD.atomic_npz(
+                scratch / pass_name / f"chunk_{number:06d}.npz",
+                {
+                    "spike_times": np.arange(events, dtype=np.int64),
+                    "rejected_reason": np.empty(0, dtype=np.int32),
+                },
+            )
+
+        write_chunk("pass_00", 0, 5)
+        write_chunk("pass_00", 1, 0)
+        write_chunk("pass_00", 2, 3)
+        write_chunk("pass_01", 2, 1)
+        if exhausted_chunks(scratch, 0, 4) != set():
+            raise AssertionError("no completed pass must exhaust nothing")
+        if exhausted_chunks(scratch, 1, 4) != {1, 3}:
+            raise AssertionError("pass-0 exhaustion set is incorrect")
+        if exhausted_chunks(scratch, 2, 4) != {0, 1, 3}:
+            raise AssertionError("exhaustion must persist across skipped passes")
+    finally:
+        shutil.rmtree(scratch, ignore_errors=True)
 
     print("0019 self-test passed", flush=True)
 
