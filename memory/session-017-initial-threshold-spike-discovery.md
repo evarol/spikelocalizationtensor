@@ -162,7 +162,41 @@
   was running at the submission check; tasks 1–5 were pending because of
   `QOSMaxMemoryPerUser`.
 
+## Plot-suite completion — 2026-08-30
+
+- Replacement plot array `16592119` completed all six tasks with exit code
+  `0:0`.
+- Both 0017 suite entry points now compile and run the reusable
+  `plot_0014_codebook_usage.py` panel as `temporal_codebook_usage.png`.
+- The panel shows every learned Omega waveform, total assignment count and
+  fraction, and usage within every peeling round. It was generated successfully
+  for all six completed 0017 runs.
+- The standalone depth-time Omega plot now uses the same 1,750-by-960 smoothed
+  categorical-density rendering as the SpikeTensor raster while preserving its
+  original layout and right-side Omega key; all six outputs were regenerated.
+
+## Resume audit — 2026-08-30
+
+- A fresh `sacct` check confirmed the recorded terminal states: the five resume
+  jobs and all six replacement plot tasks completed with exit code `0:0`; the
+  original final-chunk failures remain historical, and held plot array
+  `16575437` remains canceled with zero runtime.
+- All six `summary.json` files still report 1,958 chunks and exactly the event
+  totals recorded above.
+- Every replacement plot stdout ends with the suite-complete marker. Plot tasks
+  0--4 emitted NumPy `Mean of empty slice` / invalid-divide warnings, but no
+  task failed; task 5 did not emit those NumPy warnings.
+
+## Next Steps
+
+- [ ] Review the complete six-way plot matrix, especially localization and
+  saved reconstruction examples, before interpreting the event totals or
+  choosing a follow-up detector configuration.
+
 ## Links
 
+- [[session-018-bipolar-prototype-cone-peeling]]
+- [[session-019-all-channel-error]]
 - [[session-016-one-hot-lattice-peeling]]
 - [[session-009-ibl-style-pursuit]]
+- [[feedback_plot_suite_completeness]]

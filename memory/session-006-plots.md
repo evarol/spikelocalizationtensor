@@ -1,6 +1,6 @@
 # Session 006: Residual and Temporal-Codebook Plots
 **Created:** 2026-08-24
-**Last updated:** 2026-08-24
+**Last updated:** 2026-08-30
 
 ## Context
 Visualize the completed 10-second continuous Q8 residual smoke run without mixing it with the separate Q12 extracted-spike experiment. The monopole spatial audit in [[session-004-continuous-residual]] means the plots use the identifiable effective width `rho = sqrt(z^2 + sigma^2)` instead of interpreting fitted `z` and profile scale `sigma` independently.
@@ -24,8 +24,8 @@ Visualize the completed 10-second continuous Q8 residual smoke run without mixin
 
 ## Temporal-codebook depth-time rasters
 - `src/plots/plot_temporal_codebook_depth_time_raster.py` is a generic Q8/Q12 depth-versus-time raster plotter. It reads row-aligned `spike_times.npy`, `centroids.npy`, fitted `sources`, `temporal_idx`, and `omega`; global depth is `centroids[:, 1] + sources[:, 1]`, and time is converted from samples at 30 kHz to minutes.
-- Each spike is colored by its hard-selected temporal row. The Q colors are RGB values sampled at evenly spaced points from Matplotlib's `rainbow` map, with a discrete `Omega_0 ... Omega_{Q-1}` colorbar.
-- The rendering matches the dense raster convention in `../../sln` and `../../sln-v2`: all valid spikes by default, marker size `0.25`, alpha `0.42`, and depth limits at the `0.2%` and `99.8%` quantiles.
+- Each spike contributes the RGB color of its hard-selected temporal row. The Q colors are sampled at evenly spaced points from Matplotlib's `rainbow` map, with a discrete `Omega_0 ... Omega_{Q-1}` colorbar.
+- The rendering now matches the SpikeTensor categorical raster: all finite spikes are binned into a 1,750-by-960 time-depth image, event mass and RGB sums receive 0.5-pixel Gaussian smoothing, density controls intensity, and mixed rows blend within a bin. Depth limits remain at the `0.2%` and `99.8%` quantiles.
 - The plot uses the localization-figure dark theme (`#0d0d0d` background, light labels, dark grid) and saves at 800 DPI.
 - Q12 output: `out/plots/temporal_q12/depth_time_codebook_raster.png`, containing all `2,303,434` extracted spikes and 12 colors.
 - Q8 masked one-hot monopole output: `out/plots/gpu_fit_voxel_1um_masked_monopole/depth_time_codebook_raster.png`, containing the same `2,303,434` spikes and 8 colors.
@@ -47,5 +47,6 @@ Visualize the completed 10-second continuous Q8 residual smoke run without mixin
 
 ## Links
 - [[archive/session-003-q12-temporal-codebook]]
+- [[feedback_plot_suite_completeness]]
 - [[session-004-continuous-residual]]
 - [[project_overview]]

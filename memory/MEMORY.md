@@ -5,8 +5,13 @@ ANALYTIC_APPROACH
 - [Project Overview](project_overview.md) — analytic spike localization, reconstruction, and raw-recording residual deconvolution
 - [User Profile](user_me.md) — working style and constraints, including outside-sandbox SLURM commands and memory-only session notes
 
+## Lessons
+- [Plot Suite Completeness](feedback_plot_suite_completeness.md) — HIGH PRIORITY: every future temporal-codebook suite must show all Omega waveforms with total and per-pass/round usage; 0018+ gated plot jobs also write a SpikeTensor-style offline index and explicitly disclose unavailable exact panels.
+
 ## Sessions
-- [Initial-Threshold Spike Discovery](session-017-initial-threshold-spike-discovery.md) — ACTIVE: the final-chunk boundary bug is fixed and all six 1,958-chunk runs are complete; threshold-5/6/7/8 totals are 2,835,467/1,784,872/1,247,808/915,348 events. Replacement plot array `16592119` is running/queued after unreleasable held array `16575437` was canceled.
+- [All-Channel-Error Peeling (0019)](session-019-all-channel-error.md) — ACTIVE: implemented + validated (self-test, synthetic smoke); mean-channel objective, 20%/channel bar escalating 0.1/pass, 3 recording passes x 1 round with GPU replay of saved events, full rejection audit; ready to queue.
+- [Bipolar Prototype-Cone Residual Peeling](session-018-bipolar-prototype-cone-peeling.md) — ACTIVE: full job `16626415` and plot job `16626447` completed successfully; the 16-panel output now has a SpikeTensor-style offline browser with exact-data limitations disclosed.
+- [Initial-Threshold Spike Discovery](session-017-initial-threshold-spike-discovery.md) — ACTIVE: all six 1,958-chunk runs and plot suites are complete; threshold-5/6/7/8 totals are 2,835,467/1,784,872/1,247,808/915,348 events, and dedicated temporal-codebook waveform/usage panels were added to the suite.
 - [One-Hot Lattice Peeling](session-016-one-hot-lattice-peeling.md) — HIGH PRIORITY: learned-Omega full job `16541332` and corrected 14-panel plot job `16569753` completed; full XYZ/XYZ-sigma and saved-reconstruction figures await user review before any promotion, redesign, or rerun decision.
 - [Score-Calibrated XYZ-Sigma Promotion](session-015-score-calibrated-xyzsigma-promotion.md) — HIGH PRIORITY: score-8 full run COMPLETE (`16517915` + gated plots `16517916`); score-9 full run `16529272` queued; first-pass sigma lower-bound forcing is an active fitting-pathology hypothesis; score-boundary review and empirical-null calibration pending.
 - [XYZ-Sigma Residual Pursuit](session-014-xyzsigma-residual-pursuit.md) — HIGH PRIORITY: CUDA-valid discrete xyz-sigma pursuit has final projection gating, cross-pass duplicate suppression, compatible waveform outputs, and a completed score-8 validation chain.

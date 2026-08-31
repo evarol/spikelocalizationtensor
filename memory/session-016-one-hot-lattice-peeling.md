@@ -158,6 +158,8 @@ the complete-run plots have been reviewed by the user.
 
 ## Links
 
+- [[session-018-bipolar-prototype-cone-peeling]]
+- [[session-019-all-channel-error]]
 - [[session-017-initial-threshold-spike-discovery]]
 - [[session-015-score-calibrated-xyzsigma-promotion]]
 - [[session-014-xyzsigma-residual-pursuit]]
