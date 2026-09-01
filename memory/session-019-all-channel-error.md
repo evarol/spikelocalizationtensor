@@ -251,16 +251,30 @@ input panel plus one panel per recording pass. A 30-chunk inline test
 confirmed 100% → 94.5% RMS after pass 0; the first version silently did no
 subtraction because the volts scaling was dropped in the rewrite — worth
 remembering that `preprocess_voltage` takes volts, not raw int16 counts.
-The output `recording_replay_full_recording.png` is registered in the
-gallery for the 20% run. The full job `16693050` completed in 26 minutes
-(exit 0): RMS 100% → 92.84% after pass 0 (568,436 events), passes 1–2
-adding nothing visible (452 + 1 events) — the recording-wide duplicate-wall
-story in one figure. The job peaked at ~50 GB RSS, slightly over its 48 G
-request, so a 64 G limit is advisable if the panel joins the plot suites.
-Caveat: the queued plot
-jobs `16679742`/`16679749` hold script copies from submission time, so after
-the 5% and 10% runs finish, cancel and resubmit those two suites to produce
-the replay panels.
+The sbatch now takes the run directory as its first argument with the 20% run
+as default, and per user request the figure grew a second column: one
+cumulative depth-time spike raster per pass row (fitted-depth µm from
+`global_sources`, pass-colored smoothed density using the
+`plot_temporal_codebook_depth_time_raster` binning technique recolored for
+white), with the input row blank ("no events yet") and the replay panels in
+the left column. the 20% render (`16693050`, 26 min) plus the 5%/10% renders running as
+`16730443`/`16730444` cover all three fractions, with the stale frac5/frac10
+plot suites resubmitted as `16730632`/`16730633` dependent on them; their
+per-chunk
+most-subtractive replays also exist — every fraction peaks at the same
+chunk 1580 (5%: 1,072 events, RMS 100→87.2%; 10%: 923 events, 100→87.3%;
+20%: 693 events, 100→88.6%), and the recording-wide captured fraction is
+58.0% (5%), 60.6% (10%), and 65.6% (20%) of input energy.
+
+Rejection audit over the consolidated tables (per proposal): the 5% run
+rejected 5,222,940 of 6,328,857 proposals (82.5%), the 10% run 4,715,134 of
+5,616,468 (84.0%), and the 20% run 4,394,432 of 4,963,321 (88.5%). Pass 0
+rejections are almost purely the all-channel bar (reason 16 alone: 1.14M /
+1.35M / 1.70M across 5/10/20%), with rmse (~74k) and projection (~14.6k)
+flat across fractions; passes 1–2 are dominated by the duplicate flag
+(64 bit; up to 1.07M) almost always combined with round rollback (128 bit),
+and rollback counts scale with the bar (pass-1 rollbacks 578k → 996k →
+1.71M) — the weak-earlier-fits mechanism in numbers.
 
 ## 20% run resumed under the exhaustion code (2026-08-31)
 

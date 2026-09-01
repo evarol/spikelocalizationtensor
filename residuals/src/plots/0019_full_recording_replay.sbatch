@@ -13,8 +13,8 @@
 set -euo pipefail
 
 PROJECT_ROOT=/scratch/ap7151/iclr-paper/varol-version
-RUN_PATH=$PROJECT_ROOT/residuals/runs/dataset1_p1/0019_allchannel_pass3_round1_fraction20_step10_fitted8
-PLOT_OUTPUT=$PROJECT_ROOT/residuals/out/0019_allchannel_pass3_round1_fraction20_step10_fitted8
+RUN_PATH=${1:-$PROJECT_ROOT/residuals/runs/dataset1_p1/0019_allchannel_pass3_round1_fraction20_step10_fitted8}
+PLOT_OUTPUT=$PROJECT_ROOT/residuals/out/$(basename "$RUN_PATH")
 
 if [[ ! -f "$RUN_PATH/summary.json" ]]; then
     echo "missing completed run: $RUN_PATH" >&2
