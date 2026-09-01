@@ -1,7 +1,7 @@
 # Shift-Invariant Temporal Codebook (0021)
 **Created:** 2026-08-31
 **Last updated:** 2026-08-31
-**Status:** Draft plan — not started; written while full run `16655016` is still in progress
+**Status:** Future work — draft plan, not started (specced against the completed 0019 run `16655016`)
 
 ## Why shift invariance
 

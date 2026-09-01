@@ -1,7 +1,7 @@
 # Rank-2 Temporal Peeling (0020)
 **Created:** 2026-08-31
 **Last updated:** 2026-08-31
-**Status:** Draft plan — not started; written while full run `16655016` is still in progress
+**Status:** Future work — draft plan, not started (specced against the completed 0019 run `16655016`)
 
 ## Why rank 2
 
