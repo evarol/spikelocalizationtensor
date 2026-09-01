@@ -35,6 +35,7 @@ singularity exec --overlay /scratch/${USER}/_ENVS/pytorch.ext3:ro \
             residuals/src/plots/build_plot_gallery.py \
             residuals/src/plots/plot_0014_codebook_usage.py \
             residuals/src/plots/plot_0019_allchannel_cones.py \
+            residuals/src/plots/plot_0019_recording_replay.py \
             residuals/src/plots/plot_raw_residual_reconstructions.py \
             residuals/src/plots/plot_spiketensor_residual_pursuit.py \
             residuals/src/plots/plot_temporal_codebook_depth_time_raster.py
@@ -52,6 +53,8 @@ singularity exec --overlay /scratch/${USER}/_ENVS/pytorch.ext3:ro \
         python residuals/src/plots/plot_temporal_codebook_depth_time_raster.py \
             --run "$1" --out "$2/depth_time_omega_raster.png" \
             --max-points 1000000 --overwrite
+        python residuals/src/plots/plot_0019_recording_replay.py \
+            --run "$1" --out "$2/recording_replay_chunk0.png" --chunk-index 0 --overwrite
         python residuals/src/plots/build_plot_gallery.py \
             --run "$1" --plots "$2" --out "$2/index.html" \
             --title "0019 all-channel reconstruction pursuit"

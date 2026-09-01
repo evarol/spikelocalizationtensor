@@ -98,6 +98,21 @@ PANEL_REGISTRY = {
         "depth × time Omega raster",
         "Recording-wide event raster colored by selected temporal atom.",
     ),
+    "recording_replay_chunk0.png": (
+        "reconstruction",
+        "recording replay (chunk 0)",
+        "Preprocessed input and residuals after each 0019 recording pass, replayed from saved chunk fits.",
+    ),
+    "recording_replay_chunk001580.png": (
+        "reconstruction",
+        "recording replay (chunk 1580, most subtractive)",
+        "The highest captured-energy chunk: input versus residuals after each recording pass.",
+    ),
+    "recording_replay_full_recording.png": (
+        "reconstruction",
+        "full-recording replay",
+        "Every chunk replayed: preprocessed input versus residuals after each recording pass, signed-block decimated.",
+    ),
     "spiketensor/spiketensor_depth_time_basis.png": (
         "depth_time",
         "SpikeTensor-style depth × time basis",

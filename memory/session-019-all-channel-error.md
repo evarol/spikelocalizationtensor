@@ -1,7 +1,7 @@
 # All-Channel-Error Peeling (0019)
 **Created:** 2026-08-30
 **Last updated:** 2026-08-31
-**Status:** fraction20 run `16655016` complete (568,888 events) and plotted; 5% run resumed as `16679719` (passes 0–1 done), 10% middle-ground run `16679743` queued, plot suites `16679742`/`16679749` dependent
+**Status:** fraction sweep complete (20% `16688480` resumed → 568,889 events, 10% `16679743` → 901,334, 5% → 1.11M); plot suite now carries per-chunk recording replays, the most-subtractive chunk, and a two-column full-recording replay (voltage panels + cumulative pass rasters, job `16696099` rendering the 20% run); cross-hisspikes fitting `16685303` ongoing
 
 ## Why 0019 exists
 
@@ -195,6 +195,123 @@ requeue would have crash-looped it) and resubmitted. Working tree fully
 committed through `8be20df`; the fraction sweep now runs as 5% `16679719`
 (resume; passes 0–1 kept), 10% `16679743` (fresh), with plot suites `16679742`
 and `16679749` dependent.
+
+## Channel × time recording replay added to the suite (2026-08-31)
+
+The user asked for a channel-by-time amplitude plot in the 0019 plot suite,
+and after two rejected drafts (a binned amplitude-mass histogram, then a
+per-event scatter — "i want some continuity") settled on a continuous
+recording view like the 0018-era `residual_recording_chunk0.png` example.
+Final panel: `residuals/src/plots/plot_0019_recording_replay.py`, registered
+in `build_plot_gallery.py` as `recording_replay_chunk0.png` (reconstruction
+group) and invoked by all three 0019 sbatch suites after the Omega raster.
+It renders the preprocessed input for a 20 ms window of one chunk plus one
+panel per recording pass, subtracting each pass chunk's saved `predictions`
+exactly as the run did, in the red-blue `RdBu_r` colourway on white with
+depth-ordered channels and a voltage/robust-noise colorbar; the window is
+auto-placed where pass-0 events are densest, and pass bars in the suptitle
+come from the run config so one script serves the 5%, 10%, and 20% runs. On
+the 20% run's chunk 0 the RMS drops 100% → 97.8% after the pass-0 replay,
+matching the run's own per-chunk energy accounting (pass 1 accepted nothing
+there, so its panel is identical).
+
+The debugging detour is worth remembering: the first renders were garbage
+because the raw `.imec0.ap.bin` was memmapped as 384 columns, but SpikeGLX
+ap files carry 384 AP **plus one sync column** (`snsApLfSy=384,0,1`, 385
+columns total), so a 384-column memmap is byte-misaligned from the very
+first sample — symptoms were ~2× wrong robust noise and near-zero waveform
+correlations that looked exactly like a preprocessing mismatch. The script
+now parses the adjacent `.meta` for `snsApLfSy`, memmaps all file columns,
+slices the first `n_channels`, and scales int16 → volts by 2.34375e-06 (the
+NP1.0 AP factor the ibl `spikeglx.Reader` applies). Preprocessing is the
+standard 300–6000 Hz butter order-3 bandpass plus per-channel time-median
+(`preprocessing.raw_residual.preprocess_voltage`); no whitening, matching
+the pipeline. The spikeglx package itself was avoided on purpose — stacking
+`ibl-sorter.ext3` with `pytorch.ext3` breaks scipy/numpy ABI, and the plot
+env (pytorch overlay) has everything else needed. A per-chunk subtractiveness ranking (summed per-event `captured_energy` over
+`input_energy`, binned by `spike_times // 30000`) picked chunk 1580 as the
+heaviest chunk (693 events, 60.2% of its local energy captured); its replay
+drops RMS 100% → 88.6% with 90 events in the 20 ms view and the big
+multi-channel spikes visibly carved out, while passes 1–2 add essentially
+nothing (2 events, 0 in view) — the duplicate wall in picture form. Both
+`recording_replay_chunk0.png` and `recording_replay_chunk001580.png` are
+registered in the gallery (19 panels); the overall recording-wide captured
+fraction is 65.6% of binned input energy.
+
+The user then asked for a full-recording version, which is
+`residuals/src/plots/plot_0019_full_recording_replay.py` with its own sbatch
+`0019_full_recording_replay.sbatch` (cpu_short, ~1 h; the 20% run is job
+`16693050`). It preprocesses every chunk (300–6000 Hz bandpass + per-channel
+time-median, volts via the 2.34375e-06 factor), replays every saved pass
+chunk's `predictions` into a rolling residual (chunks are visited in order,
+events of earlier passes accumulate, events within ±45 samples of the core
+window are subtracted), normalizes by each chunk's saved `noise`, and
+decimates with signed block extrema (5000-sample bins) before stacking the
+input panel plus one panel per recording pass. A 30-chunk inline test
+confirmed 100% → 94.5% RMS after pass 0; the first version silently did no
+subtraction because the volts scaling was dropped in the rewrite — worth
+remembering that `preprocess_voltage` takes volts, not raw int16 counts.
+The output `recording_replay_full_recording.png` is registered in the
+gallery for the 20% run. The full job `16693050` completed in 26 minutes
+(exit 0): RMS 100% → 92.84% after pass 0 (568,436 events), passes 1–2
+adding nothing visible (452 + 1 events) — the recording-wide duplicate-wall
+story in one figure. The job peaked at ~50 GB RSS, slightly over its 48 G
+request, so a 64 G limit is advisable if the panel joins the plot suites.
+Caveat: the queued plot
+jobs `16679742`/`16679749` hold script copies from submission time, so after
+the 5% and 10% runs finish, cancel and resubmit those two suites to produce
+the replay panels.
+
+## 20% run resumed under the exhaustion code (2026-08-31)
+
+The 20% run `16655016` had early-stopped by the old recording-wide floor
+(`stopping_reason: pass_1_below_floor` — pass 1 at the 0.30 bar accepted 452
+events, pass 2 never ran), and was never re-run with the new code. Per user
+instruction it was resumed as job `16688480` (9 min 23 s, exit 0), keeping
+passes 0–1 and running pass 2 at the 0.40 bar over only the 399 chunks that
+were productive in pass 1. The result confirms the duplicate wall tightens
+with the bar: pass 2 accepted exactly 1 event (340 of 1,306 proposals killed
+as duplicates in the last logged round, the rest as all-channel-plus-rollback
+combos), so the 20% run's final yield is 568,889 events and the run now ends
+`all_passes_complete` instead of an artificial floor stop. One migration fix
+was needed first: the old run's `pass_summaries.json` still carried the legacy
+`"stopped": true` flag from the removed floor, and `pursue()` honored it,
+which would have skipped pass 2 immediately. Because the exhaustion code never
+writes that flag, the `stopped_after` gate was deleted from
+`0019_allchannel_peeling.py` (legacy markers are now inert); py_compile passed
+and the sbatch is the unchanged `0019_allchannel_full.sbatch` with `--resume`.
+
+## Cross-comparison with the SLT collision repo (2026-08-31)
+
+To put 0019's fit quality next to the other implementation
+(`/scratch/ap7151/_SYMLINKS/am15577-paths/UnitMatch/SLT_ICLR/collision/base_implementation`,
+the "SLT/spiketensor" multipole decomposition), the two error metrics are being
+cross-evaluated on each other's spike lists. His metric is nMSE over per-spike
+C=10 TPCA-denoised × T=90 windows (DC-removed, ÷100) divided by variance
+4.242133873e-4; his per-spike `sse`/`captured` arrays live in
+`runs/base_M64_R4/multipole_uo_monop_M64_R4_s10_P2c35.npz` and his 2,310,868
+spike times/channels in `extraction/results/dataset1_p1/`. Both pipelines read
+the same raw binary. Two facts already established:
+
+- **His metric on my spikes.** 86.8% of my 568,888 accepted events match one of
+  his spikes (same channel, ±0.5 ms). On that matched subset his base fit gets
+  nMSE 8.236, VE 91.3%; a random size-matched control subset of his own spikes
+  gets 8.107 / 85.8%. So at my event sites his model explains more energy than
+  average — my sites are strong clean spikes.
+- **My metric on his spikes** is running as job `16685303`
+  (`0019_cross_hisspikes_fit.py` + `0019_cross_hisspikes.sbatch`): the frozen
+  0019 model (codebook, neighborhoods, filter from the 20% run) fit once on raw
+  windows at each of his 2.31M sites, no detection/peeling. The harness is
+  validated by a self-check that re-fits the run's own pass-0 events through
+  the identical path and reproduces the consolidated metrics to ~1e-4. The
+  2-segment smoke on his spikes: mean-channel nRMSE 1.24 (like mine) but
+  captured fraction 0.42 (mine: 0.61) and only ~23% passing the 20%
+  all-channel bar (reason 16 dominant).
+
+The fraction sweep on my own spikes is now complete: 5% bar → 1,105,917
+events (captured 0.527, VE 0.580), 10% bar `16679743` → 901,334 events
+(captured 0.557, VE 0.606; pass 2 at 0.30 accepted zero and the run ended
+`all_chunks_exhausted`), 20% bar → 568,888 (captured 0.614, VE 0.656).
 
 ## Next steps
 
