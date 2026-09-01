@@ -584,9 +584,6 @@ def pursue(
     summaries = (
         json.loads(summaries_path.read_text()) if summaries_path.exists() else []
     )
-    stopped_after = next(
-        (entry["recording_pass"] for entry in summaries if entry.get("stopped")), None
-    )
     completed = 0
     while (
         completed < config.recording_passes
@@ -596,9 +593,6 @@ def pursue(
     exhausted = exhausted_chunks(output, completed, len(starts))
     stopping_reason = "all_passes_complete"
     for pass_index in range(completed, config.recording_passes):
-        if stopped_after is not None and pass_index > stopped_after:
-            stopping_reason = f"stopped_after_pass_{stopped_after}"
-            break
         if len(exhausted) >= len(starts):
             stopping_reason = "all_chunks_exhausted"
             break
