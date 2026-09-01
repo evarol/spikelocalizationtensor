@@ -1,7 +1,7 @@
 # All-Channel-Error Peeling (0019)
 **Created:** 2026-08-30
-**Last updated:** 2026-08-31
-**Status:** fraction sweep complete (20% `16688480` resumed → 568,889 events, 10% `16679743` → 901,334, 5% → 1.11M); plot suite now carries per-chunk recording replays, the most-subtractive chunk, and a two-column full-recording replay (voltage panels + cumulative pass rasters, job `16696099` rendering the 20% run); cross-hisspikes fitting `16685303` ongoing
+**Last updated:** 2026-09-01
+**Status:** fraction sweep complete (20% `16688480` resumed → 568,889 events, 10% `16679743` → 901,334, 5% `16679719` → 1,105,917, all ending `all_passes_complete` under the exhaustion code); cross-fit `16685303` complete (my fitter on his 2.31M spikes: captured 0.42, 23.8% passing the 20% bar); plot suite carries per-chunk, most-subtractive-chunk, and two-column full-recording replays (`16696099`); 5%/10% galleries resubmitted as `16722284`/`16722285` to pick up the replay panels
 
 ## Why 0019 exists
 
@@ -313,6 +313,39 @@ events (captured 0.527, VE 0.580), 10% bar `16679743` → 901,334 events
 (captured 0.557, VE 0.606; pass 2 at 0.30 accepted zero and the run ended
 `all_chunks_exhausted`), 20% bar → 568,888 (captured 0.614, VE 0.656).
 
+The reverse cross-fit job `16685303` completed in 39:29 over all 2,310,868 of
+his spikes, and the smoke numbers held at scale: my frozen 20% model achieves
+mean-channel nRMSE 1.279 (median 1.168 — like my own events) but captured
+fraction only 0.421 mean / 0.411 median (mine: 0.614), and the median
+worst-channel captured fraction is 0.048, so his spike sites spread their
+energy much less uniformly across channels than mine. Under the 20% all-channel
+bar just 550,136 of his 2.31M sites would be accepted (23.8%); 1.64M die on the
+all-channel criterion alone (reason 16), 89.6% pass the detection gate, and
+essentially all pass rmse/projection. Both directions of the comparison agree:
+his decomposition matches spikes my detector never proposes (weaker, less
+spatially concentrated), while at my event sites his fit is as good as on his
+own spikes — the pipelines find overlapping but not identical event sets.
+
+## 5% run finished under the exhaustion code; plot suites resubmitted (2026-09-01)
+
+The 5% resume `16679719` completed in 14:17 with exit 0 and, crucially, ended
+with `stopping_reason: all_passes_complete` — the loop-completion semantics the
+user asked for, not a recording-wide early stop. Pass 2 at the 0.25 bar visited
+1,365/1,958 chunks, marked 1,957 exhausted, and accepted a single event, so the
+final 5% yield stands at 1,105,917 events with 5.22M logged rejections (pass 0:
+1,103,359, pass 1: 2,557). A chunk visit that accepts zero events marks the
+chunk exhausted and later passes skip it, which is why the whole resume cost 14
+minutes instead of a full third pass.
+
+The dependent plot suites `16679742` (5%) and `16679749` (10%) both completed
+exit 0, but as predicted their sbatch copies predated the replay-panel script:
+the galleries registered the base 16 panels with no
+`recording_replay_chunk0.png` (11 PNGs on disk versus 19 in the 20% gallery).
+Both suites were resubmitted from the current scripts — `16722284` for the 5%
+run, `16722285` for the 10% run — each with a 64G memory request; the 10% job
+sat pending on `QOSMaxMemoryPerUser` behind the running 5% job and was not yet
+verified complete at the time of writing (the user declined a wait-and-check).
+
 ## Next steps
 
 - [x] Implement the all-channel criterion, pass loop, GPU replay, rejection log.
@@ -323,10 +356,16 @@ events (captured 0.527, VE 0.580), 10% bar `16679743` → 901,334 events
       fractions.
 - [x] Replace the recording-wide pass floor with per-chunk exhaustion skipping
       so the recording always runs to natural completion.
-- [ ] When `16678849` finishes: pass-2 yield at the 0.25 bar, the full-run
-      sigma mix, and comparison of the 5% vs 20% acceptance-quality trade.
+- [x] Confirm the 5% resume finished the exhaustion way: `16679719` ended
+      `all_passes_complete` with pass 2 at the 0.25 bar accepting 1 event.
+- [ ] Verify the resubmitted 5%/10% plot suites (`16722284`, `16722285`)
+      produced the replay panels in their galleries.
+- [ ] Full-run sigma mix across the fraction sweep, and the 5% vs 20%
+      acceptance-quality trade.
 - [ ] Near-surface share of accepted sigma-2 events (0018's 57%-within-3 µm
       diagnostic) on both runs.
+- [ ] Record the cross-fit results of `16685303` (my fitter on his 2.31M
+      spikes) into the cross-comparison section above.
 
 ## Links
 
