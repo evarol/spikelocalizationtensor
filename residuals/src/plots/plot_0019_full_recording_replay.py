@@ -204,15 +204,15 @@ def main():
 
     figure, axes = plt.subplots(
         len(stages),
-        2,
-        figsize=(19, 14),
+        3,
+        figsize=(24, 14),
         sharex=True,
         constrained_layout=True,
-        gridspec_kw={"width_ratios": [2.2, 1.0]},
+        gridspec_kw={"width_ratios": [2.2, 1.0, 1.0]},
     )
     image = None
-    for index, (left, right) in enumerate(axes):
-        left_axis, raster_axis = left, right
+    for index, columns in enumerate(axes):
+        left_axis, raster_axis, single_axis = columns
         image = left_axis.imshow(
             stages[index][:, channel_order].T,
             origin="lower",
@@ -239,6 +239,12 @@ def main():
                 transform=raster_axis.transAxes, ha="center", va="center",
                 color="#888888", fontsize=12,
             )
+            single_axis.set_title("each pass's own events", fontsize=10)
+            single_axis.text(
+                0.5, 0.5, "—",
+                transform=single_axis.transAxes, ha="center", va="center",
+                color="#888888", fontsize=12,
+            )
         else:
             rows = cumulative[index]
             raster = pass_colour_raster(
@@ -259,18 +265,49 @@ def main():
             )
             added = pass_totals[index - 1]
             raster_axis.set_title(f"+ pass {index - 1} events ({added:,})", fontsize=10)
+            own = np.flatnonzero(np.asarray(recording_pass) == index - 1)
+            if len(own):
+                own_raster = pass_colour_raster(
+                    event_x[own],
+                    event_depth[own],
+                    np.asarray(recording_pass)[own],
+                    (0.0, duration_minutes),
+                    (depth_low, depth_high),
+                    1750,
+                    960,
+                )
+                single_axis.imshow(
+                    own_raster,
+                    origin="lower",
+                    extent=(0.0, duration_minutes, depth_low, depth_high),
+                    aspect="auto",
+                    interpolation="nearest",
+                )
+            else:
+                single_axis.text(
+                    0.5, 0.5, "nothing accepted",
+                    transform=single_axis.transAxes, ha="center", va="center",
+                    color="#888888", fontsize=12,
+                )
+            single_axis.set_title(
+                f"pass {index - 1} events ({pass_totals[index - 1]:,})", fontsize=10
+            )
         raster_axis.set_xlim(extent[0], extent[1])
         raster_axis.set_ylim(depth_low, depth_high)
         raster_axis.set_ylabel("fitted depth (µm)")
+        single_axis.set_xlim(extent[0], extent[1])
+        single_axis.set_ylim(depth_low, depth_high)
     tick_rows = np.linspace(0, n_channels - 1, 6).astype(int)
     depth_ticks = np.linspace(depth_low, depth_high, 6)
-    for left, raster in axes:
+    for left, raster, single in axes:
         left.set_yticks(
             tick_rows, [f"{contacts[channel_order[row], 1]:.0f}" for row in tick_rows]
         )
         raster.set_yticks(depth_ticks, [f"{tick:.0f}" for tick in depth_ticks])
+        single.set_yticks(depth_ticks, [f"{tick:.0f}" for tick in depth_ticks])
     axes[-1, 0].set_xlabel("recording time (min)")
     axes[-1, 1].set_xlabel("recording time (min)")
+    axes[-1, 2].set_xlabel("recording time (min)")
     figure.colorbar(image, ax=axes[:, 0], label="voltage / robust channel noise", pad=0.01)
     figure.suptitle(
         f"0019 full-recording replay · chunks {args.first_chunk}–{last_chunk} · "

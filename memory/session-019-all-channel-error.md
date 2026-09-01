@@ -251,15 +251,20 @@ input panel plus one panel per recording pass. A 30-chunk inline test
 confirmed 100% → 94.5% RMS after pass 0; the first version silently did no
 subtraction because the volts scaling was dropped in the rewrite — worth
 remembering that `preprocess_voltage` takes volts, not raw int16 counts.
-The sbatch now takes the run directory as its first argument with the 20% run
-as default, and per user request the figure grew a second column: one
+The sbatch takes the run directory as its first argument (20% run default).
+The figure's columns evolved with the user's requests: column 2 holds a
 cumulative depth-time spike raster per pass row (fitted-depth µm from
 `global_sources`, pass-colored smoothed density using the
 `plot_temporal_codebook_depth_time_raster` binning technique recolored for
-white), with the input row blank ("no events yet") and the replay panels in
-the left column. the 20% render (`16693050`, 26 min) plus the 5%/10% renders running as
-`16730443`/`16730444` cover all three fractions, with the stale frac5/frac10
-plot suites resubmitted as `16730632`/`16730633` dependent on them; their
+white), with the input row blank ("no events yet"), and column 3 — added
+next — shows only that pass's own events ("pass 0 events (568,436)",
+"pass 1 events (452)", …), the direct picture of how little the escalation
+passes contribute. The three-column renders are jobs `16732015`
+(20%), `16732016` (5%), and `16732017` (10%), with the stale frac5/frac10
+plot suites resubmitted as `16732100`/`16732101` dependent on them (earlier
+suite resubmissions `16722284`/`16722285` and `16730632`/`16730633` were
+superseded — the first predates the replay panels, the second was cancelled
+to avoid rendering the two-column figure twice); their
 per-chunk
 most-subtractive replays also exist — every fraction peaks at the same
 chunk 1580 (5%: 1,072 events, RMS 100→87.2%; 10%: 923 events, 100→87.3%;
