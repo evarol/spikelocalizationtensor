@@ -72,8 +72,11 @@ def main():
         int(round(config["read_margin_ms"] * fs / 1000)), n_before + n_after, 128
     )
     bar = float(config["all_channel_min_fraction"])
+    step = float(config.get("pass_fraction_step", 0.1))
     recording_passes = int(metadata["passes"]["recording_passes"])
-    pass_bars = "/".join(f"{bar + 0.1 * index:.0%}" for index in range(recording_passes))
+    pass_bars = "/".join(
+        f"{min(bar + step * index, 0.9):.0%}" for index in range(recording_passes)
+    )
 
     chunks = load_pass_chunks(args.run, args.chunk_index, recording_passes)
     core_start = int(metadata["first_sample"]) + args.chunk_index * chunk_samples
