@@ -116,9 +116,8 @@ the direct ancestor of 0010's per-channel RMSE gate and, eventually,
 - 008's whitening diagnostic had already shown whitening doesn't rescue poor
   captures, which is why Δχ² was the path.
 
-## Links
-
 - [[session-010-whitened-dense-pursuit]]
 - [[session-008-peak-channel-codebook-init]]
 - [[session-007-global-codebook-pursuit]]
+- [[session-022-kilosort-baseline]] — full kilosort 2.5 run on dataset1_p1 through the same ibl-sorter overlay
 - [[project_overview]]

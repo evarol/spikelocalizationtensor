@@ -1,7 +1,7 @@
 # All-Channel-Error Peeling (0019)
 **Created:** 2026-08-30
 **Last updated:** 2026-09-01
-**Status:** fraction sweep complete (20% `16688480` resumed → 568,889 events, 10% `16679743` → 901,334, 5% `16679719` → 1,105,917, all ending `all_passes_complete` under the exhaustion code); cross-fit `16685303` complete (my fitter on his 2.31M spikes: captured 0.42, 23.8% passing the 20% bar); plot suite carries per-chunk, most-subtractive-chunk, and two-column full-recording replays; the 5%/10% resubmitted galleries (`16722284`/`16722285`) verified complete with replay panels; three-column full-recording renders `16732015–17` and dependent full suites `16732100`/`16732101` in flight; everything in `residuals/out/` reachable from the new hub `residuals/out/index.html` (`build_out_index.py`)
+**Status:** fraction sweep complete (20% `16688480` resumed → 568,889 events, 10% `16679743` → 901,334, 5% `16679719` → 1,105,917, all ending `all_passes_complete` under the exhaustion code); cross-fit `16685303` complete (my fitter on his 2.31M spikes: captured 0.42, 23.8% passing the 20% bar); plot suite carries per-chunk, most-subtractive-chunk, and three-column full-recording replays; the three-column renders `16732015–17` and dependent full suites `16732100`/`16732101` all completed exit 0 on 2026-09-01 with `recording_replay_full_recording.png` verified in all three galleries; everything in `residuals/out/` reachable from the new hub `residuals/out/index.html` (`build_out_index.py`); four acceptance-rule variant runs launched 2026-09-01 evening (`16762080–83`, all healthy in the alternating fit at last check)
 
 ## Why 0019 exists
 
@@ -380,6 +380,30 @@ collection links with every target verified to exist. Also unrelatedly in the
 queue: `ibl_ap_c` conversion job `16730433` running and `16730850`–`58` held on
 dependency.
 
+## Plot suites all landed (2026-09-01, evening)
+
+Every job the morning status listed as in flight is now COMPLETED with exit 0:
+the three-column full-recording renders `16732015` (20%, 33:18), `16732016`
+(5%, 42:07), and `16732017` (10%, 35:06), and the dependent full suites
+`16732100` (frac5, 4:18) and `16732101` (frac10, 3:27). Verified on disk: each
+of the three galleries now carries `recording_replay_full_recording.png` (the
+frac5 one is 49.6 MB) and the galleries were refreshed 14:51–14:56 on 09-01,
+so the superseding chain is fully delivered. Unrelated queue state:
+`ibl_ap_clips` `16730433` running (4h+) with `16739648` waiting on
+`afterany:16730433` (the earlier held array `16730850–58` was cancelled),
+`OOD-jupyter` `16737123` and `kilosort-iblsorter` `16740477` running.
+
+## Acceptance-rule variants (2026-09-01, evening)
+
+The fraction sweep varied only the bar height with "worst valid channel
+decides" fixed. Per the user's request the aggregation rule and escalation
+schedule became dials too: four runs (flat bar, steep step 0.2, mean-channel
+rule, k-of-n rule) went out as `16762080–83`, each single-variable against an
+existing sweep run. The `all_channel_rule` config dial, the
+`all_channel_acceptance()` gate, self-test coverage, and the four sbatches
+are all documented in [[session-023-acceptance-rule-variants]], which owns
+everything about these variants from here on.
+
 ## Next steps
 
 - [x] Implement the all-channel criterion, pass loop, GPU replay, rejection log.
@@ -404,10 +428,13 @@ dependency.
       diagnostic) on both runs.
 - [x] Record the cross-fit results of `16685303` (my fitter on his 2.31M
       spikes) into the cross-comparison section above.
+- [x] Launch the four acceptance-rule variant runs (`16762080–83`); their
+      follow-up now lives in [[session-023-acceptance-rule-variants]].
 
 ## Links
 
 - [[session-018-bipolar-prototype-cone-peeling]]
+- [[session-023-acceptance-rule-variants]]
 - [[session-016-one-hot-lattice-peeling]]
 - [[session-017-initial-threshold-spike-discovery]]
 - [[feedback_plot_suite_completeness]]
