@@ -363,6 +363,12 @@ def main():
         f"wrote {output} ({len(panels)} panels, {registered} registered)",
         flush=True,
     )
+    try:
+        import build_out_index
+
+        build_out_index.build()
+    except Exception as exc:
+        print(f"hub index rebuild skipped: {exc}", flush=True)
 
 
 if __name__ == "__main__":

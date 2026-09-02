@@ -293,7 +293,7 @@ def build_payload(data: dict) -> str:
     return txt.replace("</", "<\\/")
 
 
-def main() -> None:
+def build() -> Path:
     data = collect(OUT, RUNS)
     page = HTML.replace("__GENERATED__", data["generated"])
     page = page.replace("__PAYLOAD__", build_payload(data))
@@ -303,7 +303,12 @@ def main() -> None:
     n_c = len(data["collections"])
     n_f = len(data["figures"])
     print(f"wrote {dest} ({n_g} galleries, {n_c} collections, {n_f} standalone "
-          f"figures, {dest.stat().st_size // 1024} KiB)")
+          f"figures, {dest.stat().st_size // 1024} KiB)", flush=True)
+    return dest
+
+
+def main() -> None:
+    build()
 
 
 if __name__ == "__main__":

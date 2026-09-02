@@ -634,6 +634,12 @@ def build_index(out, run, summary, comp_summary, job_id, ks):
     )
     (out / "index.html").write_text(doc)
     print(f"wrote {out / 'index.html'} ({len(panels)} panels)", flush=True)
+    try:
+        import build_out_index
+
+        build_out_index.build()
+    except Exception as exc:
+        print(f"hub index rebuild skipped: {exc}", flush=True)
 
 
 def main():

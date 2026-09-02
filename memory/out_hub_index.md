@@ -16,10 +16,21 @@ JSON; this hub copies that idea for the whole `residuals/out/` tree.
 
 `residuals/src/plots/build_out_index.py` (stdlib-only) walks `residuals/out/`
 top level and writes `residuals/out/index.html`, a single dark-theme page with
-three sections:
+three sections. **It auto-updates:** `build_plot_gallery.py` (used by every
+0019+ plot-suite sbatch) and `kilosort_baseline_plots.py` (0022) both call
+`build_out_index.build()` after writing their own gallery, so any suite job
+that lands a gallery refreshes the hub in the same job. Suites set
+`PYTHONPATH=$PWD/residuals/src:$PWD/residuals/src/plots`, which is what makes
+the import resolve inside sbatch. A failed hub rebuild prints
+"hub index rebuild skipped" and never fails the suite. Anything that adds
+files *without* running a gallery builder (a lone script, an sbatch that only
+drops PNGs) still needs the one-shot manual `python residuals/src/plots/build_out_index.py`.
 
-- **Galleries** — directories containing an `index.html` (4 of them: 0018 and
-  the three 0019 fractions). Each row joins the backing run directory
+Sections:
+
+- **Galleries** — directories containing an `index.html` (9 of them: 0018, the
+  three original 0019 fractions, the mean20/step20/kofn20/step0 sweep
+  variants, and 0022 kilosort). Each row joins the backing run directory
   (`residuals/runs/dataset1_p1/<tag>/`) for `summary.json`/`config.json`
   metadata: n_events, n_rejected, detection threshold, the escalating
   all-channel bars (rendered like 0.05→0.25), stopping reason, PNG count,
