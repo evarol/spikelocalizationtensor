@@ -161,14 +161,22 @@ def media_url(path, output):
 
 def panel_info(path, plot_root, output):
     relative = path.relative_to(plot_root).as_posix()
-    group, label, description = PANEL_REGISTRY.get(
-        relative,
-        (
-            "other",
-            path.stem.replace("_", " ").replace("-", " "),
-            f"Additional generated output: {relative}.",
-        ),
-    )
+    if relative.startswith("recording_replay_chunk") and relative not in PANEL_REGISTRY:
+        stem = relative[len("recording_replay_chunk"):].removesuffix(".png")
+        group, label, description = (
+            "reconstruction",
+            f"recording replay (chunk {int(stem)}, most subtractive)",
+            "The highest captured-energy chunk: input versus residuals after each recording pass.",
+        )
+    else:
+        group, label, description = PANEL_REGISTRY.get(
+            relative,
+            (
+                "other",
+                path.stem.replace("_", " ").replace("-", " "),
+                f"Additional generated output: {relative}.",
+            ),
+        )
     suffix = path.suffix.lower()
     media_type = "image" if suffix in IMAGE_SUFFIXES else "video"
     if suffix in HTML_SUFFIXES:
