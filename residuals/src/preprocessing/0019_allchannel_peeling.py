@@ -6,10 +6,13 @@ two-prototype cone codebook. Two things change:
     1. The fit objective is TOTAL channel error (mean-channel noise-normalized SSE)
        instead of the worst channel, so a narrow template that touches only the peak
        channel can no longer win the position search.
-    2. Acceptance requires EVERY valid channel in the fit mask to capture at least
-       `all_channel_min_fraction` of its OWN noise-normalized energy. The bar tightens
-       by `pass_fraction_step` per recording pass. Detection stays at the same
-       threshold on every pass; only the reconstruction bar escalates.
+    2. Acceptance applies a per-channel reconstruction bar. `all_channel_rule` picks
+       how the per-channel captured fractions aggregate: "min-channel" (every valid
+       channel must capture at least `all_channel_min_fraction` of its OWN
+       noise-normalized energy), "mean-channel" (their mean must reach the bar), or
+       "k-of-n" (a share `all_channel_required_share` of the valid channels must
+       reach it). The bar tightens by `pass_fraction_step` per recording pass.
+       Detection stays at the same threshold on every pass; only the bar escalates.
 
 Structure: the recording is walked `recording_passes` times. Each chunk visit runs
 `peeling_rounds` (default 1) detect-fit-subtract rounds. Passes 2+ rebuild each chunk's
@@ -23,7 +26,7 @@ audit tables are consolidated per pass and at the run root; nothing is silently 
 """
 
 import importlib.util
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import json
 from pathlib import Path
 import sys
@@ -63,6 +66,8 @@ class Config(PIPELINE.Config):
     all_channel_improvement: bool = True
     all_channel_min_fraction: float = 0.2
     pass_fraction_step: float = 0.1
+    all_channel_rule: str = "min-channel"
+    all_channel_required_share: float = 0.875
     log_rejections: bool = True
 
 
@@ -116,9 +121,27 @@ def output_metadata(config, recording_path, fs, n_channels, first, stop):
         "raw_energy_drop_floor": config.min_raw_energy_drop,
         "all_channel_improvement": config.all_channel_improvement,
         "all_channel_rule": (
-            "every valid channel must capture at least the pass fraction of its own "
-            "noise-normalized input energy" if config.all_channel_improvement else
+            {
+                "min-channel": (
+                    "every valid channel must capture at least the pass fraction of "
+                    "its own noise-normalized input energy"
+                ),
+                "mean-channel": (
+                    "the mean captured fraction across valid channels must reach "
+                    "the pass fraction"
+                ),
+                "k-of-n": (
+                    f"at least {config.all_channel_required_share:.3f} of valid "
+                    "channels must capture the pass fraction"
+                ),
+            }[config.all_channel_rule]
+            if config.all_channel_improvement else
             f"at least {config.min_improved_channels} channels improve"
+        ),
+        "all_channel_rule_name": config.all_channel_rule,
+        **(
+            {"all_channel_required_share": config.all_channel_required_share}
+            if config.all_channel_rule == "k-of-n" else {}
         ),
         "pass1_fraction": config.all_channel_min_fraction,
         "pass_fraction_step": config.pass_fraction_step,
@@ -322,6 +345,47 @@ def pass_all_channel_fraction(config, pass_index):
     """Per-channel bar for one recording pass: base fraction plus one step per pass."""
     return float(min(config.all_channel_min_fraction
                      + config.pass_fraction_step * pass_index, 0.9))
+
+
+def all_channel_acceptance(channel_improvement, channel_input, mask, bar, config):
+    """Aggregate per-channel captured fractions into the all-channel gate.
+
+    Returns the pass mask and each event's worst valid-channel captured fraction.
+    "min-channel" keeps the historical energy-floor form (improvement >= input*bar)
+    so its events stay comparable with the completed fraction sweep; channels with
+    near-zero input energy are excluded from the mean and count as passing elsewhere,
+    matching how the floor form treats them.
+    """
+    per_channel_fraction = torch.where(
+        channel_input > 1e-8,
+        channel_improvement / channel_input.clamp_min(1e-8),
+        torch.full_like(channel_input, float("inf")),
+    )
+    if config.all_channel_rule == "min-channel":
+        all_ok = (
+            (channel_improvement >= channel_input * bar - 1e-6) | ~mask
+        ).all(dim=1)
+    elif config.all_channel_rule == "mean-channel":
+        informative = mask & (channel_input > 1e-8)
+        mean_fraction = (
+            torch.where(
+                informative,
+                per_channel_fraction,
+                torch.zeros_like(per_channel_fraction),
+            ).sum(dim=1)
+            / informative.sum(dim=1).clamp_min(1)
+        )
+        all_ok = mean_fraction >= bar - 1e-6
+    elif config.all_channel_rule == "k-of-n":
+        required = torch.ceil(
+            config.all_channel_required_share * mask.sum(dim=1).float()
+        )
+        all_ok = (
+            ((per_channel_fraction >= bar - 1e-6) | ~mask).sum(dim=1) >= required
+        )
+    else:
+        raise ValueError(f"unknown all-channel rule: {config.all_channel_rule}")
+    return all_ok, per_channel_fraction.amin(dim=1)
 
 
 def empty_chunk(width, waveform_length, save_waveforms):
@@ -846,15 +910,13 @@ def process_chunk(
             )
             normalized_waveform = waveforms / local_noise[:, :, None]
             channel_input = normalized_waveform.square().sum(dim=2) * mask
-            channel_floor = channel_input * channel_fraction
-            all_ok = (
-                (fit["channel_improvement"] >= channel_floor - 1e-6) | ~mask
-            ).all(dim=1)
-            min_channel_fraction = torch.where(
-                channel_input > 1e-8,
-                fit["channel_improvement"] / channel_input.clamp_min(1e-8),
-                torch.full_like(channel_input, float("inf")),
-            ).amin(dim=1)
+            all_ok, min_channel_fraction = all_channel_acceptance(
+                fit["channel_improvement"],
+                channel_input,
+                mask,
+                channel_fraction,
+                config,
+            )
             accepted = (
                 torch.isfinite(fit["alpha"])
                 & (fit["alpha"] > 0)
@@ -1780,6 +1842,12 @@ def validate_config(config):
         raise ValueError("the all-channel fraction must be strictly inside (0, 1)")
     if config.pass_fraction_step < 0:
         raise ValueError("the pass fraction step must be nonnegative")
+    if config.all_channel_rule not in ("min-channel", "mean-channel", "k-of-n"):
+        raise ValueError(
+            "all-channel rule must be min-channel, mean-channel, or k-of-n"
+        )
+    if not 0 < config.all_channel_required_share <= 1:
+        raise ValueError("the k-of-n required channel share must be inside (0, 1]")
 
 
 def self_test(device):
@@ -1853,6 +1921,66 @@ def self_test(device):
         raise AssertionError("pass-1 channel fraction is incorrect")
     if abs(pass_all_channel_fraction(fraction_step, 2) - 0.4) > 1e-9:
         raise AssertionError("pass-3 channel fraction escalation is incorrect")
+
+    base_config = Config()
+    improvement = torch.tensor(
+        [[0.5, 0.05, 0.5], [0.4, 0.4, 0.4]], device=device
+    )
+    channel_input = torch.ones(2, 3, device=device)
+    fit_mask = torch.ones(2, 3, dtype=torch.bool, device=device)
+    ok_min, worst = all_channel_acceptance(
+        improvement, channel_input, fit_mask, 0.2, base_config
+    )
+    if ok_min.tolist() != [False, True] or not torch.allclose(
+        worst, torch.tensor([0.05, 0.4], device=device)
+    ):
+        raise AssertionError("min-channel acceptance is incorrect")
+    ok_mean, _ = all_channel_acceptance(
+        improvement,
+        channel_input,
+        fit_mask,
+        0.2,
+        replace(base_config, all_channel_rule="mean-channel"),
+    )
+    if ok_mean.tolist() != [True, True]:
+        raise AssertionError("mean-channel acceptance is incorrect")
+    ok_share, _ = all_channel_acceptance(
+        improvement,
+        channel_input,
+        fit_mask,
+        0.2,
+        replace(
+            base_config,
+            all_channel_rule="k-of-n",
+            all_channel_required_share=0.5,
+        ),
+    )
+    if ok_share.tolist() != [True, True]:
+        raise AssertionError("k-of-n acceptance at share 0.5 is incorrect")
+    ok_strict, _ = all_channel_acceptance(
+        improvement, channel_input, fit_mask, 0.2, replace(
+            base_config, all_channel_rule="k-of-n"
+        )
+    )
+    if ok_strict.tolist() != [False, True]:
+        raise AssertionError("k-of-n acceptance at the default share is incorrect")
+    sparse_input = torch.tensor([[1.0, 1e-9, 1.0]], device=device)
+    sparse_improvement = torch.tensor([[0.5, -1e-9, 0.5]], device=device)
+    sparse_mask = torch.ones(1, 3, dtype=torch.bool, device=device)
+    ok_sparse, worst_sparse = all_channel_acceptance(
+        sparse_improvement, sparse_input, sparse_mask, 0.2, base_config
+    )
+    if ok_sparse.tolist() != [True] or float(worst_sparse[0]) != 0.5:
+        raise AssertionError("near-zero-input channels must not fail the min rule")
+    ok_sparse_mean, _ = all_channel_acceptance(
+        sparse_improvement,
+        sparse_input,
+        sparse_mask,
+        0.2,
+        replace(base_config, all_channel_rule="mean-channel"),
+    )
+    if ok_sparse_mean.tolist() != [True]:
+        raise AssertionError("mean-channel must skip near-zero-input channels")
 
     prediction, duplicates = replay_predictions(
         None, 0, 100, 100, 5, 5, omega, "cpu"
