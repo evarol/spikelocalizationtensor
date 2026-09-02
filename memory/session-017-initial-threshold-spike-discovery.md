@@ -123,6 +123,7 @@ A later `sacct` audit confirmed all terminal states and that every
 
 - [[session-018-bipolar-prototype-cone-peeling]]
 - [[session-019-all-channel-error]]
+- [[session-024-convolving-detection-peeling]]
 - [[session-016-one-hot-lattice-peeling]]
 - [[session-009-ibl-style-pursuit]]
 - [[feedback_plot_suite_completeness]]
