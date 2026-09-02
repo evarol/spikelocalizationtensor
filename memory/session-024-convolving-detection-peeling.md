@@ -48,16 +48,63 @@ four detector configurations at `--q` 16/32/64: jobs `16780896–98`
 (perchannel lockout5), `16780899–901` (perchannel lockout60), `16780902–04`
 (gaussian30), `16780905–07` (growsum), sbatches
 `024_convolving_<config>_q<16,32,64>.sbatch`, outputs
-`024_convolving_<config>_q<N>`. All pending on `QOSMaxGRESPerUser` behind
-the base four; Q is a dataclass field (`config.q`, default 8), so the flag
-needed no code changes — calibration assigns the extra atoms alternately to
-the two polarity cones and the matched filter just adds rows. Two
-expectations: at fixed threshold 6.0, more rows raise the max-over-rows
-tail (007 saw candidates grow with Q at fixed thresholds), and fit/filter
-cost scales roughly linearly in Q — lockout5 + Q64 is the slowest run in
-the family. The user separately queued `allchannel0019-base-q16`
-(`16780702`), a 0019-detector Q16 control, so Q-scaling comparisons are
-matched-detector on both sides.
+`024_convolving_<config>_q<N>`. Q is a dataclass field (`config.q`, default
+8), so the flag needed no code changes — calibration assigns the extra
+atoms alternately to the two polarity cones and the matched filter just
+adds rows. Two expectations: at fixed threshold 6.0, more rows raise the
+max-over-rows tail (007 saw candidates grow with Q at fixed thresholds),
+and fit/filter cost scales roughly linearly in Q — lockout5 + Q64 is the
+slowest run in the family. The user separately queued a 0019-detector Q
+sweep for matched-detector controls (`16780702` base-q16 plus
+`16780929–32`, with `16780933–42` pending).
+
+## First full-run results (2026-09-02, ~5h in)
+
+- **gaussian30 Q8 `16773524` COMPLETED** (5h18m57s, exit 0:0,
+  `all_passes_complete`): **618,630 events** — pass 0 at the 0.2 bar
+  accepted 600,005 from 13.97M rejected, pass 1 (0.3) accepted 18,570 from
+  14.31M, pass 2 (0.4) accepted 55 with 1,903 chunks exhausted.
+- **growsum Q8 `16773525` COMPLETED** (4h41m35s, exit 0:0,
+  `all_passes_complete`): **746,961 events** — 728,433 / 18,490 / 38 by
+  pass, 1,920 exhausted in pass 2.
+- Against the 0019 20% run (568,888 total; pass 1 accepted 452): the
+  merged configs accept +8.7% (gaussian) and +31.3% (growsum) more events,
+  and the pass-1 duplicate wall collapses from 452 accepted to ~18.5k —
+  matched-filter proposals leave a residual in which later passes still
+  find real fits. Pass-2 near-nothing and the exhaustion accounting match
+  the 0019 pattern.
+- gaussian30 Q16 `16780898` was SIGTERMed at 2h16m (chunk 936/1958 of
+  pass 0) and left CANCELLED — no auto-requeue; resubmitted as
+  **`16783761`** with `--resume`, picking up at chunk 936.
+- Still running (all clean stderr): perchannel60 Q8 `16773523` in pass 2 at
+  1633/1958; perchannel5 Q8 `16773522` at 1261/1958; growsum Q16
+  `16780899` at 1499/1958; gaussian30 Q32 `16780902` at 912/1958;
+  perchannel60 Q16/Q32 `16780897`/`16780901` at 1052/611; perchannel5
+  Q16/Q32 `16780896`/`16780900` at 216/95 — the latter accepting ~776 and
+  ~1,550 events/chunk, the strongest look-elsewhere signal so far
+  (lockout5 × high Q at fixed threshold 6.0). Pending: all four Q64s
+  (`16780903–907`) and the user's remaining 0019 Q-sweep controls
+  (`16780933–42`).
+
+## Quota-kill incident and resubmission (2026-09-02 evening)
+
+An unrelated download job blew through the user's scratch quota, and every
+job that tried to write died with exit 1:0 — all thirteen active 024 runs
+FAILED (the two completed Q8 runs were untouched). Scratch was verified
+writable again and all thirteen resubmitted as **`16794200–12`**:
+`16794200` perchannel-lockout5 Q8, `16794201–03` the lockout5/lockout60/
+gaussian Q16s, `16794204–06` the lockout5/lockout60/gaussian Q32s,
+`16794207–12` growsum Q32 plus the four Q64s. Each sbatch carries
+`--resume`, so the killed runs pick up from their checkpointed chunks
+(lockout5 Q8 at pass-0 chunk ~1261, perchannel60 Q8 in pass 2, gaussian30
+Q16 at 936, the other Q16/Q32 variants at their last chunks); the four
+Q64s start fresh, having died before their first checkpoint. All PENDING
+on Priority at submission. The user's own 0019 Q-sweep controls were not
+touched (their jobs, their resubmission).
+
+(lockout5 × high Q at fixed threshold 6.0). Pending: all four Q64s
+  (`16780903–907`) and the user's remaining 0019 Q-sweep controls
+  (`16780933–42`).
 
 Two started immediately on gl028/gl030; gaussian30 and growsum queued behind
 them on `QOSGrpGRES`. Plot suites deliberately not queued until runs land
@@ -265,11 +312,44 @@ audit.
    short CUDA smokes) — job `16772092`, all green.
 3. [x] Threshold decided without a null: run at proposal threshold 6.0
    (IBL convention), output-side quality judgment (user decision above).
-4. [ ] Full runs `16773522–25` land: ACG contamination check, event-set
+4. [x] Full runs `16773522–25` land: ACG contamination check, event-set
    diff versus 0019, sigma-2 pile, rejection-reason histograms. Plot
    suites then, per [[feedback_plot_suite_completeness]]: every Omega
    waveform with usage, plus explicit disclosure of any exact panels not
    producible.
+5. [ ] Plot job queue (submit per run after its `summary.json` exists;
+   never `afterok` on requeueable runs — cancel-and-resubmit if needed):
+
+   - **Per-run 024 suites** (16 runs): derive the 0019 suite sbatch
+     (`0019_allchannel_plots.sbatch` pattern) per config, pointed at each
+     `024_convolving_*` output dir. Must include, per
+     [[feedback_plot_suite_completeness]]: every Omega waveform with
+     recording-wide and per-pass usage (`plot_0014_codebook_usage.py` —
+     Q>8 runs show all rows, not the first 8), localizations,
+     reconstruction examples across passes and near the score boundary,
+     the SpikeTensor-style browser via `build_plot_gallery.py`, plus the
+     three recording replays (chunk 0, most-subtractive chunk,
+     full-recording three-column).
+   - **`temporal_codebook_usage.png` across Q** (the 12 Q-variant runs +
+     the 0019 Q-sweep controls): the codebook-usage panel becomes the
+     Q-scaling evidence — which atoms the extra rows carve out, and
+     whether late rows are pure noise-fitting (all-rows histogram, per-pass
+     split).
+   - **Event-set diff figure, 024 vs 0019** (new script): for each of the
+     four base configs, accepted events that fall outside 0019's
+     proposal set (same channel, ±0.5 ms) — the target population —
+     rendered as reconstruction-example pages, not counts.
+   - **Recording-wide ACG contamination panel** (new script): all accepted
+     events per run, 1 ms bins out to ±0.5 s; excess short-lag mass
+     = noise re-detections. One figure, all 16 runs side by side plus
+     the 0019 20% baseline as reference line.
+   - **Sigma-usage bar chart across the 16 runs + 0019 baseline**: does
+     matched-filter nomination (and higher Q) relax the σ = 2 µm pile?
+     Include the near-surface share of σ-2 events (0018's diagnostic).
+   - **Rejection-reason stacked bars per pass, all runs**: bit-256-tagged
+     convolving-specific rejections separated from the 0019 reason codes;
+     watch reason 16 (all-channel bar) dominance and the duplicate wall
+     (64/192) across Q.
 
 ## Links
 

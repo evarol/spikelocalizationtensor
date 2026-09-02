@@ -128,10 +128,22 @@ runs 5 configs × 3 sizes = 15 runs into run dirs suffixed `_q16/_q32/_q64`
 atoms are assigned to the two prototypes by `q modulo 2`, and the k-means,
 cone projection, and duplicate machinery all take `config.q` — but the
 0016→0019 lineage had only ever run at Q=8, so the base q=16 run went first
-as a GPU canary (`16780702`): it cleared calibration and was accepting
-~335 events/chunk at bar 0.2 by chunk 51, so the path works. The remaining
-14 went in as `16780929–42` (flat10/step20/mean20/kofn20 × q16/32/64, plus
-base q32/q64), pending on GPU priority behind the convolving024 jobs. A CPU
+as a GPU canary (`16780702`, completed 1:49): it cleared calibration and was
+accepting ~335 events/chunk at bar 0.2 by chunk 51, so the path works. The
+remaining 14 went in as `16780929–42` (flat10/step20/mean20/kofn20 ×
+q16/32/64, plus base q32/q64). The user's unrelated download job blew the
+scratch quota and the scheduler then killed everything running: base-q16
+`16780702` and step20-q16 `16780930` had completed (exit 0) before the
+quota blowup; the other 13 died with exit 1 mid-run (I/O deaths, no
+traceback — the base-q32 log shows a healthy 32-row alternating fit, the
+flat10-q16 resume was mid-pass-2, so not a q>8 code bug). Once the quota
+was writable again, all 13 were requeued with `--resume` as `16794259` and
+`16794261–72` (the sweep sbatch counts a completed pass by its
+`consolidation.json`, counts existing chunk files as visits, and atomic-npz
+means no half-written chunks, so mid-pass deaths resume cleanly;
+step20-q16 `16794260` was also requeued by the loop and self-terminates
+from its completed state). Queue state at reporting: all 14 pending on
+Priority. A CPU
 smoke of the full pipeline is impossible — extraction is CUDA-only by
 design (`residuals_0012.validate_config`), which is why the canary ran on
 GPU. Everything else stays identical to the Q=8 runs (threshold 5,
@@ -189,6 +201,12 @@ and rejection histograms which variants earn galleries.
 - [ ] When the 15 q-sweep runs (`16780702`, `16780929–42`) land: totals per
       (variant, Q), the duplicate-wall shift with Q, and whether bigger
       codebooks raise captured fraction at fixed acceptance rules.
+- [ ] Queue plot suites for the q-sweep runs once their results are in —
+      copy the upgraded variant-suite sbatches (chunk-0 + chunk-1629 replays
+      + chained full-recording render), find each run's own most-subtractive
+      chunk instead of assuming 1629, and verify the replay suptitle's
+      per-pass bars, which now read `pass_fraction_step` from the run
+      config.
 
 ## Links
 
