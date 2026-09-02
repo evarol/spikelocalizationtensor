@@ -102,6 +102,13 @@ Q64s start fresh, having died before their first checkpoint. All PENDING
 on Priority at submission. The user's own 0019 Q-sweep controls were not
 touched (their jobs, their resubmission).
 
+Checkpoint verification at ~1.5h after resubmission: all nine started runs
+healthy, every resume landing exactly at its checkpoint — perchannel5 Q8 at
+pass-0 1765/1958, gaussian30/perchannel60 Q16 finished pass 0 and in pass 1
+(25/21 chunks), growsum Q16 pass 1 at 733, gaussian30 Q32 at pass-0 1623,
+perchannel60 Q32 at 1071, growsum Q32 at 410, perchannel5 Q32 at 188. The
+four Q64s remain PENDING on `QOSMaxGRESPerUser`.
+
 (lockout5 × high Q at fixed threshold 6.0). Pending: all four Q64s
   (`16780903–907`) and the user's remaining 0019 Q-sweep controls
   (`16780933–42`).

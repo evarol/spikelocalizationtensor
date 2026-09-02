@@ -182,6 +182,29 @@ upgraded suites are jobs `16775165` (flat10), `16775166` (step20),
 Plot suites were deliberately not queued: decide after seeing event counts
 and rejection histograms which variants earn galleries.
 
+## Plot suites for the q sweep (2026-09-02)
+
+Queued with one new parameterized sbatch,
+`residuals/src/plots/0019_allchannel_q_sweep_plots.sbatch` (same
+`VARIANT`×`Q` env-var scheme as the run sweep; run/plot dirs derived from
+the same `DIRTAG` mapping). It renders the standard panels plus chunk-0
+replay, then **computes each run's own most-subtractive chunk at runtime**
+(max of `captured_energy.sum()/input_energy.sum()` over `pass_00` chunks)
+instead of assuming chunk 1629, renders that replay, builds the gallery,
+and renders the full-recording replay inline (no chained job, since the
+sweep runs finish at different times). Supporting change:
+`build_plot_gallery.py` now labels any unregistered
+`recording_replay_chunk*.png` as "recording replay (chunk N, most
+subtractive)" in the reconstruction group instead of dumping it into
+"other" — the chunk number varies per run and codebook. The replay
+suptitle already reads `pass_fraction_step` from the run config, so flat10
+and step20 show correct bar schedules. The five completed q16 runs got
+immediate suites `16802326–30`; the ten q32/q64 runs got suites
+`16802377–91` with `--dependency=afterok` on their run jobs (dependencies
+on already-completed jobs fail with a submission error, on
+running/pending jobs they are accepted — the earlier failure was the
+completed-run case).
+
 ## Next steps
 
 - [x] When `16762080–83` land: per-pass event counts, rejection-reason
@@ -198,15 +221,14 @@ and rejection histograms which variants earn galleries.
       `16775652–53`, `16775656`) completed exit 0; every gallery now carries
       14 PNGs including `recording_replay_chunk001629.png` and
       `recording_replay_full_recording.png`.
-- [ ] When the 15 q-sweep runs (`16780702`, `16780929–42`) land: totals per
-      (variant, Q), the duplicate-wall shift with Q, and whether bigger
-      codebooks raise captured fraction at fixed acceptance rules.
-- [ ] Queue plot suites for the q-sweep runs once their results are in —
-      copy the upgraded variant-suite sbatches (chunk-0 + chunk-1629 replays
-      + chained full-recording render), find each run's own most-subtractive
-      chunk instead of assuming 1629, and verify the replay suptitle's
-      per-pass bars, which now read `pass_fraction_step` from the run
-      config.
+- [ ] When the 15 q-sweep runs land (survivors `16780702`, `16780930`;
+      requeued as `16794259`, `16794261–72`): totals per (variant, Q), the
+      duplicate-wall shift with Q, and whether bigger codebooks raise
+      captured fraction at fixed acceptance rules.
+- [x] Queue plot suites for the q-sweep runs — done as one parameterized
+      sbatch (see the q-sweep plot section): immediate suites `16802326–30`
+      for the completed q16 runs, dependent suites `16802377–91` for the
+      rest. Verify all 15 galleries land with the full panel set.
 
 ## Links
 
