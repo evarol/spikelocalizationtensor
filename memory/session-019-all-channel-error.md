@@ -404,6 +404,16 @@ existing sweep run. The `all_channel_rule` config dial, the
 are all documented in [[session-023-acceptance-rule-variants]], which owns
 everything about these variants from here on.
 
+## Resume verification (2026-09-04)
+
+`sacct` on resume confirms the four acceptance-rule variant runs
+`16762080–83` all COMPLETED exit 0 (1:14–1:57); their results and the whole
+5×3 codebook sweep live in [[session-023-acceptance-rule-variants]], which
+now reads COMPLETE on both dials. Nothing from this card is in the queue.
+The fraction-sweep quality items below stay open and now overlap with 0023's
+pending audit — the sigma-mix / near-surface check should be done once,
+across the sweep + variants, not per card.
+
 ## Next steps
 
 - [x] Implement the all-channel criterion, pass loop, GPU replay, rejection log.

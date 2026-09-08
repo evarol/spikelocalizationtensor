@@ -85,6 +85,18 @@ def load_pass_events(run, recording_passes):
     return passes
 
 
+def _open_nwb_reader(recording_path):
+    import importlib.util
+
+    module_path = (
+        Path(__file__).resolve().parents[1] / "preprocessing" / "0025_primate_peeling.py"
+    )
+    spec = importlib.util.spec_from_file_location("peeling_0025", module_path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module.build_nwb_reader(recording_path)
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--run", type=Path, required=True)
@@ -118,16 +130,21 @@ def main():
     pass_totals = [len(stage["times"]) if stage else 0 for stage in passes]
 
     recording_path = Path(metadata["recording_path"])
-    meta = dict(
-        line.split("=", 1)
-        for line in recording_path.with_suffix(".meta").read_text().splitlines()
-        if "=" in line
-    )
-    ap, lf, sy = (int(part) for part in meta["snsApLfSy"].split(","))
-    total_samples = recording_path.stat().st_size // (2 * (ap + lf + sy))
-    raw = np.memmap(
-        recording_path, dtype="<i2", mode="r", shape=(total_samples, ap + lf + sy)
-    )
+    nwb_mode = recording_path.suffix == ".nwb"
+    if nwb_mode:
+        raw = _open_nwb_reader(recording_path)
+        total_samples = int(raw.ns)
+    else:
+        meta = dict(
+            line.split("=", 1)
+            for line in recording_path.with_suffix(".meta").read_text().splitlines()
+            if "=" in line
+        )
+        ap, lf, sy = (int(part) for part in meta["snsApLfSy"].split(","))
+        total_samples = recording_path.stat().st_size // (2 * (ap + lf + sy))
+        raw = np.memmap(
+            recording_path, dtype="<i2", mode="r", shape=(total_samples, ap + lf + sy)
+        )
 
     contacts = np.load(args.run / "channel_positions.npy")
     channel_order = np.lexsort((contacts[:, 0], contacts[:, 1]))
@@ -154,8 +171,11 @@ def main():
         core_stop = min(core_start + chunk_samples, int(metadata["stop_sample"]))
         read_start = max(0, core_start - margin)
         read_stop = min(total_samples, core_stop + margin)
+        window = raw[read_start:read_stop, :n_channels].astype(np.float32)
+        if not nwb_mode:
+            window = window * 2.34375e-06
         data = preprocess_voltage(
-            raw[read_start:read_stop, :n_channels].astype(np.float32) * 2.34375e-06,
+            window,
             fs,
         ).astype(np.float32)
         noise_path = args.run / "pass_00" / f"chunk_{index:06d}.npz"

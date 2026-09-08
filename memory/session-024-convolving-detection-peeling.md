@@ -1,7 +1,7 @@
 # Convolving Detection Peeling (0024)
 **Created:** 2026-09-01
 **Last updated:** 2026-09-02
-**Status:** Full runs in flight — four single-variable jobs `16773522–25` all RUNNING; no empirical null (user decision, see below); results pending
+**Status:** 15 of 16 runs COMPLETE, all `all_passes_complete` — Q64s landed 2026-09-08: gaussian30 778,198, growsum 980,288, perchannel60 940,224; perchannel5 Q64 (`16794209`) still running. Q32→Q64 adds +7–10%, so the Q16→Q32 plateau was not the tail-end after all. Ten per-run plot suites completed; suites for the five newly finished runs plus the cross-run scripts (event-set diff, ACG, sigma pile, rejection stacks) still owed. No empirical null (user decision, see below). Q8 anchors: gaussian30 618,630, growsum 746,961 vs 0019's 568,888.
 
 ## Threshold decision: no empirical null (2026-09-02)
 
@@ -109,26 +109,67 @@ pass-0 1765/1958, gaussian30/perchannel60 Q16 finished pass 0 and in pass 1
 perchannel60 Q32 at 1071, growsum Q32 at 410, perchannel5 Q32 at 188. The
 four Q64s remain PENDING on `QOSMaxGRESPerUser`.
 
-(lockout5 × high Q at fixed threshold 6.0). Pending: all four Q64s
-  (`16780903–907`) and the user's remaining 0019 Q-sweep controls
-  (`16780933–42`).
+## Results through Q32 (2026-09-03)
 
-Two started immediately on gl028/gl030; gaussian30 and growsum queued behind
-them on `QOSGrpGRES`. Plot suites deliberately not queued until runs land
-and [[feedback_plot_suite_completeness]] applies.
+Ten of sixteen runs complete, every one ending `all_passes_complete`:
 
-Progress at ~2h (2026-09-02): all four healthy. gaussian30 and growsum
-finished pass 0 and are in pass 1 (124/1958 and 398/1958); perchannel60 at
-1684/1958 of pass 0; perchannel/lockout5 trails at 451/1958 because it
-keeps ~50,000 proposals per chunk (the ±5-sample lockout cannot absorb the
-filter response's temporal ringing) versus 7,400–10,800 at lockout 60, so
-it runs ~14 s/chunk versus ~2–3 s and needs ~10–12 h total. The
-duplicate-merging numbers from the logs are the design working: raw
-matched-filter crossings per chunk run 0.7–3.7M, collapsing to 7–11k
-proposals after merge plus NMS (~280× for gaussian30, ~500× for growsum).
-No cap enforcement, no errors. A method document was written at
-`docs/0024_convolving_detection.md` in the style of `0019_end_to_end.md`
-(matched-filter and merge-layer linear algebra included).
+| config | Q8 | Q16 | Q32 |
+|---|---|---|---|
+| gaussian30 | 618,630 (`16773524`) | 710,076 (`16794203`) | 725,134 (`16794207`) |
+| growsum | 746,961 (`16773525`) | 859,814 (`16794204`) | 890,223 (`16794208`) |
+| perchannel60 | 716,313 (`16773523`) | 805,237 (`16794202`) | 864,249 (`16794206`) |
+| perchannel5 | 1,304,808 (`16794200`) | — | — |
+
+Readings so far: every 024 run exceeds 0019's 568,888 at the same bar
+(+9% to +129%), the Q8→Q16 bump is ~+15% in both merge families
+(consistent fixed-threshold look-elsewhere inflation at acceptance), and
+the Q16→Q32 step is much smaller (+2% to +4%) — the codebook tail is
+starting to saturate. The outlier is perchannel5 Q8 at 1,304,808 (2.3× the
+0019 baseline): the 017-parity control is the most permissive
+configuration, and whether that is genuine weak-spike recovery or
+ringing-induced double-detections is exactly the ACG question. gaussian30
+Q64 `16794211` and growsum Q64 `16794212` were CANCELLED with zero
+runtime (no chunks written) and resubmitted as `16817041`/`16817042`.
+Still running at the 18:15 mark: perchannel5 Q16/Q32/Q64 (pass 1 at 1139,
+pass 0 at 1372/511), perchannel60 Q64 in pass 1 at 1490, and the two
+resubmitted Q64s in pass 2.
+
+## Health check at ~5 h post-resubmission (2026-09-02)
+
+Ten of the thirteen resubmitted runs are RUNNING with clean resumes and empty stderr
+(log-name mapping: `16794201` perchannel-lockout5-q16, `16794202` perchannel-lockout60-q16,
+`16794203` gaussian30-q16, `16794204` growsum-q16, `16794205` perchannel-lockout5-q32,
+`16794206` perchannel-lockout60-q32, `16794207` gaussian30-q32, `16794208` growsum-q32,
+`16794209` perchannel-lockout5-q64); the pending three Q64s are perchannel-lockout60
+`16794210`, gaussian30 `16794211`, and growsum `16794212` on `QOSGrpGRES`. Progress
+lines: perchannel-lockout5 Q8 `16794200` is in pass 1 at 496/1958 and **still accepting
+38–72 events/chunk at the 0.3 bar** — the duplicate wall stays weak under convolving
+proposals even at Q8, echoing the gaussian/growsum finding; perchannel-lockout60 Q16
+`16794202` is at pass-1 1477/1958 with 0–3 events/chunk (wall already reached);
+gaussian30 Q32 `16794207` at pass-1 994/1958 accepting 22–43/chunk; growsum Q32
+`16794208` still in pass 0 at 1520/1958 with 637–651 events/chunk; perchannel-lockout5
+Q64 `16794209` at pass-0 28/1958 with 853–1264 events/chunk — the strongest
+look-elsewhere signal in the family, consistent with lockout5 × high Q at fixed
+threshold 6.0.
+
+## Plot suites queued (2026-09-03 evening)
+
+`residuals/src/plots/024_convolving_plots.sbatch` — one parameterized suite
+sbatch (run name as sbatch argument, `--mem 64G` for the replay panels,
+same eight-figure set as the 0019 suite: lattice plots, all-Q-rows codebook
+usage, prototype cones, reconstruction examples, SpikeTensor-style panels,
+depth-time raster, chunk-0 recording replay, and a
+`build_plot_gallery.py` browser titled with the run name) submitted for all
+ten completed runs as jobs **`16904853–67`** (gaussian30 Q8/Q16/Q32,
+growsum Q8/Q16/Q32, perchannel60 Q8/Q16/Q32, perchannel5 Q8), each writing
+`residuals/out/<run-name>/index.html`. They drain one at a time on the
+per-user memory limit (~4 min each). First submission `16904821–30`
+failed in seconds on a wrong argument (bare config name instead of the
+`024_convolving_`-prefixed run dir) — cancelled and resubmitted
+correctly. Still owed when the remaining six runs land: their suites, plus
+the cross-run panels from the card's plot-queue spec (event-set diff vs
+0019, recording-wide ACG contamination, sigma-pile bars, rejection-reason
+stacks — those need two new scripts built).
 
 ## Validation (2026-09-02)
 
@@ -357,6 +398,35 @@ audit.
      convolving-specific rejections separated from the 0019 reason codes;
      watch reason 16 (all-channel bar) dominance and the duplicate wall
      (64/192) across Q.
+
+## Q64 results; one straggler (2026-09-08)
+
+Three of the four Q64 runs are done, all `all_passes_complete` exit 0:
+
+| config | Q8 | Q16 | Q32 | Q64 |
+|---|---|---|---|---|
+| gaussian30 | 618,630 | 710,076 | 725,134 | 778,198 |
+| growsum | 746,961 | 859,814 | 890,223 | 980,288 |
+| perchannel60 | 716,313 | 805,237 | 864,249 | 940,224 |
+| perchannel5 | 1,304,808 | 1,871,791 | 2,409,853 | running |
+
+The Q32→Q64 step is +7–10% in all three, so the +2–4% Q16→Q32 plateau was
+not the codebook tail saturating — atom count keeps paying at Q64, roughly
+monotone with no sign of turning over yet (matching the 0019-rule sweep's
+shape). perchannel5 Q64 (`16794209`) is the straggler: 17+ h in, pass 1 at
+777/1958, ~175 s/chunk, still accepting 168–299 events/chunk at the 0.3 bar
+— the duplicate wall stays weak under lockout5 even at Q64. It will hit its
+24 h walltime first; the USR1 trap should checkpoint-and-requeue it the way
+the other convolving jobs survived.
+
+Plot suites: the ten submitted for the originally-complete runs all
+completed exit 0 (the `plot024` jobs in the `16904853–67` range; the other
+IDs in that range are the user's unrelated `rvf-*` jobs, CANCELLED, not
+ours). All ten galleries are on disk. Still owed: suites for the five newly
+completed runs (perchannel5 q16/q32, perchannel60 q64, gaussian30 q64,
+growsum q64), perchannel5-q64's suite once its run lands, and the cross-run
+panels (event-set diff vs 0019, recording-wide ACG, sigma-usage bars,
+rejection-reason stacks — the two new scripts).
 
 ## Links
 

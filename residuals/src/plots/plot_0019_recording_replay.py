@@ -49,6 +49,18 @@ def choose_window(times, core_start, core_stop, width):
     return int(starts[int(np.argmax(counts))])
 
 
+def _open_nwb_reader(recording_path):
+    import importlib.util
+
+    module_path = (
+        Path(__file__).resolve().parents[1] / "preprocessing" / "0025_primate_peeling.py"
+    )
+    spec = importlib.util.spec_from_file_location("peeling_0025", module_path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module.build_nwb_reader(recording_path)
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--run", type=Path, required=True)
@@ -88,21 +100,31 @@ def main():
     display_stop = min(display_start + window_samples, core_stop)
 
     recording_path = Path(metadata["recording_path"])
-    meta_path = recording_path.with_suffix(".meta")
-    meta = dict(
-        line.split("=", 1)
-        for line in meta_path.read_text().splitlines()
-        if "=" in line
-    )
-    ap, lf, sy = (int(part) for part in meta["snsApLfSy"].split(","))
-    file_channels = ap + lf + sy
-    total_samples = recording_path.stat().st_size // (2 * file_channels)
+    if recording_path.suffix == ".nwb":
+        nwb_reader = _open_nwb_reader(recording_path)
+        total_samples = int(nwb_reader.ns)
+
+        def read_raw(a, b):
+            return nwb_reader[a:b, :n_channels].astype(np.float32)
+    else:
+        meta_path = recording_path.with_suffix(".meta")
+        meta = dict(
+            line.split("=", 1)
+            for line in meta_path.read_text().splitlines()
+            if "=" in line
+        )
+        ap, lf, sy = (int(part) for part in meta["snsApLfSy"].split(","))
+        file_channels = ap + lf + sy
+        total_samples = recording_path.stat().st_size // (2 * file_channels)
+
+        def read_raw(a, b):
+            return np.memmap(
+                recording_path, dtype="<i2", mode="r", shape=(total_samples, file_channels)
+            )[a:b, :n_channels].astype(np.float32) * 2.34375e-06
+
     read_start = max(0, core_start - margin)
     read_stop = min(total_samples, core_stop + margin)
-    raw = np.memmap(
-        recording_path, dtype="<i2", mode="r", shape=(total_samples, file_channels)
-    )[read_start:read_stop, :n_channels].astype(np.float32)
-    raw *= 2.34375e-06
+    raw = read_raw(read_start, read_stop)
 
     data = preprocess_voltage(raw, fs)
     noise = np.asarray(chunks[0]["noise"], dtype=np.float32)

@@ -1,7 +1,9 @@
 # Acceptance-Rule Variants (0023)
 **Created:** 2026-09-01
 **Last updated:** 2026-09-01
-**Status:** all four acceptance-rule runs complete exit 0, all ending `all_passes_complete`; totals — flat10 906,052, step20 900,448, mean20 1,724,240, kofn20 1,246,190; escalation speed is a weak dial (all three 10%-bar runs within 6k of each other), the aggregation rule is the strong dial (mean-channel 3.0×, k-of-n 2.2× the 20% run); plot suites verified complete with the full panel set (14 PNGs each, per-chunk + chunk-1629 + full-recording replays, jobs `16775165–69` and chained `16775228`/`16775652–53`/`16775656`); per-variant quality audit pending
+**Created:** 2026-09-01
+**Last updated:** 2026-09-02
+**Status:** COMPLETE on both dials — the four acceptance-rule runs and the full 5×3 codebook sweep (15 runs) all ended `all_passes_complete`, all 15 galleries built with the full panel set. Totals across Q=8→64: base 569k→743k, flat10 906k→1.12M, step20 900k→1.09M, mean20 1.72M→1.96M, kofn20 1.25M→1.49M. More atoms add events monotonically at every rule; rule ordering (mean > kofn > flat ≈ step > base) is invariant to Q; escalation still weak. Pending: sigma-mix/near-surface quality audit on the big mean20 runs.
 
 ## Why 0023 exists
 
@@ -198,14 +200,68 @@ sweep runs finish at different times). Supporting change:
 subtractive)" in the reconstruction group instead of dumping it into
 "other" — the chunk number varies per run and codebook. The replay
 suptitle already reads `pass_fraction_step` from the run config, so flat10
-and step20 show correct bar schedules. The five completed q16 runs got
-immediate suites `16802326–30`; the ten q32/q64 runs got suites
-`16802377–91` with `--dependency=afterok` on their run jobs (dependencies
-on already-completed jobs fail with a submission error, on
-running/pending jobs they are accepted — the earlier failure was the
-completed-run case).
+and step20 show correct bar schedules.
 
-## Next steps
+Two submission waves were needed: the first dependent submission passed
+`Q=q64` (letter included) by accident, so those suites failed fast on the
+missing-run guard (`_qq64` dir); and another scheduler purge wave
+CANCELLED-by-0 the whole first batch of pending plot suites. The final
+state: 12 of 15 runs complete (only kofn20-q64 `16794270` and base-q64
+`16794272` still running; mean20-q32 was killed mid-pass-2 and resumed as
+`16816964`). Plot suites resubmitted with correct Q: `16816966–77`
+immediate for the completed runs, `16816987` (`afterok:16816964`),
+`16816988` (`afterok:16794270`), `16816989` (`afterok:16794272`) for the
+three stragglers. Most suites queue on `QOSMaxMemoryPerUser` (64G
+request), so they serialize; base-q16's suite was the first to start.
+
+## Q16 runs complete; mean20-q32 killed by QOS (2026-09-02)
+
+All five q16 runs are done and end `all_passes_complete`: base 635,256, flat10 987,956
+(`16794259`), step20 974,666 (`16794260`, self-terminating from its completed state as
+designed), mean20 1,808,003 (`16794261`), kofn20 1,338,731 (`16794262`). Q=16 inflates
+every variant's total by roughly 5–12% over its Q=8 twin (base 635k vs 569k, flat10
+988k vs 906k, step20 975k vs 900k, mean20 1.81M vs 1.72M, kofn20 1.34M vs 1.25M), and
+the rule hierarchy is unchanged: mean > kofn > flat > step > base. Three q32 runs also
+landed — flat10 `16794263`, step20 `16794264`, kofn20 `16794266`, all COMPLETED — but
+**mean20-q32 `16794265` was SIGTERM-killed at 15:31 by `QOSMaxGRESPerUser`** while
+mid-pass-2 at chunk 123/1958, every visited chunk accepting zero (all proposals
+duplicate-rejected with rollback, reasons 192/144/146 — the duplicate wall is total
+for the mean rule at Q32). It was requeued the same day as `16817267`
+(`sbatch --export=VARIANT=mean20,Q=32` on the sweep sbatch; resume picks up at
+pass-2 chunk 123 with passes 0–1 consolidated: 1,857,163 + 42,794 events). Still running: the four q64 variants `16794267–70`, base-q32 `16794271`,
+base-q64 `16794272`. The q16 plot suites `16802326–30` are pending on Priority and can
+go at any time since their runs are complete; the q32/q64 suites `16802377–91` stay on
+`afterok` dependencies.
+
+## Sweep results: all 15 runs and galleries complete (2026-09-02)
+
+Every run exited 0 with `stopping_reason: all_passes_complete`, and all 15
+galleries built (14 PNGs each, including each run's own most-subtractive
+chunk replay and the full-recording replay). Totals per (config, Q), with
+the Q=8 baselines for comparison:
+
+| config | Q=8 | Q=16 | Q=32 | Q=64 |
+|---|---|---|---|---|
+| base (bar .2, min) | 568,889 | 635,256 | 694,753 | 742,738 |
+| flat10 | 906,052 | 987,956 | 1,067,274 | 1,121,706 |
+| step20 | 900,448 | 974,666 | 1,043,539 | 1,094,827 |
+| mean20 | 1,724,240 | 1,808,003 | 1,900,546 | 1,955,846 |
+| kofn20 | 1,246,190 | 1,338,731 | 1,431,211 | 1,494,851 |
+
+Findings:
+
+- **More codebook atoms add events monotonically at every acceptance
+  rule.** Base +30% from Q=8→64, variants +8–20%. The gain comes from
+  better-shaped fits passing the same gates, not from the rules changing.
+- **The rule ordering is invariant to Q**: mean > kofn > flat ≈ step > base
+  at every codebook size. The two dials act independently.
+- **Escalation still barely matters** — flat10 and step20 remain within ~3%
+  of each other at every Q.
+- The pending quality question compounds: the mean20 Q=64 run's ~1.96M
+  events (3.4× the base run) need the sigma-mix/near-surface audit more
+  than ever.
+
+
 
 - [x] When `16762080–83` land: per-pass event counts, rejection-reason
       histograms (expect mean20/kofn20 to shift rejections from reason 16
@@ -230,8 +286,29 @@ completed-run case).
       for the completed q16 runs, dependent suites `16802377–91` for the
       rest. Verify all 15 galleries land with the full panel set.
 
+## Resume verification (2026-09-04)
+
+Checked the queue and `sacct` on resume: every run and suite this card was
+waiting on has landed. The mean20-q32 resume `16817267` completed in 43:12
+exit 0 (passes 0–1 kept, 1,857,163 + 42,794 events, plus whatever pass 2 at
+the 0.40 bar admitted), the late-landing plot suites `16816987–89`
+(mean20-q32, kofn20-q64, base-q64) all completed exit 0, and the surviving
+first-batch suites that show FAILED/CANCELLED in sacct (`16802326–30`,
+`16802377–91`) are the superseded Q-typo/purge wave, already replaced.
+On disk all 15 q-sweep galleries carry 14 PNGs and every run's
+`summary.json` ends `all_passes_complete`. Nothing from this card remains in
+the queue. The only open item is the accepted-event quality audit below.
+
+## Next steps
+
+- [x] When the 15 q-sweep runs land: totals per (variant, Q) recorded above;
+      monotone Q gains, invariant rule ordering, escalation still weak.
+- [ ] Accepted-event quality across the sweep: sigma mix and near-surface
+      share of accepted sigma-2 events, worst on mean20 q64 (1.96M events).
+
 ## Links
 
 - [[session-019-all-channel-error]]
 - [[session-021-shift-invariant-peeling]]
 - [[session-024-convolving-detection-peeling]]
+- [[session-027-acceptance-gate-census-trim]]

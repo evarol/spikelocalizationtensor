@@ -14,6 +14,13 @@ two-prototype cone codebook. Two things change:
        reach it). The bar tightens by `pass_fraction_step` per recording pass.
        Detection stays at the same threshold on every pass; only the bar escalates.
 
+    Acceptance gates (2026-09-05 trim): max-channel RMSE, the all-channel bar, and
+    the duplicate test. The gain, captured-fraction, projection-score, and
+    raw-energy-drop conditions were removed as gates after a census of ~27M logged
+    proposals showed none of them ever decided an acceptance on dataset1_p1 (see
+    docs/0019_acceptance_mathematics.md §3.1); their metrics are still computed and
+    saved per event and per rejected proposal.
+
 Structure: the recording is walked `recording_passes` times. Each chunk visit runs
 `peeling_rounds` (default 1) detect-fit-subtract rounds. Passes 2+ rebuild each chunk's
 starting residual on the GPU by replaying every saved event from earlier passes onto
@@ -115,10 +122,14 @@ def output_metadata(config, recording_path, fs, n_channels, first, stop):
         "valid channels (mean-channel-rmse), not the worst channel"
     )
     metadata["acceptance"] = {
-        "projection_score_floor": config.min_fitted_projection,
+        "active_gates": (
+            "max_channel_normalized_rmse, all-channel bar, duplicate; the gain, "
+            "captured-fraction, projection, and raw-energy gates were removed on "
+            "2026-09-05 after a census over ~27M logged proposals showed they "
+            "never decide an acceptance on dataset1_p1 (docs/0019_acceptance_"
+            "mathematics.md §3.1); the metrics stay saved as diagnostics"
+        ),
         "max_channel_normalized_rmse": config.max_channel_normalized_rmse,
-        "captured_fraction_floor": config.min_captured_fraction,
-        "raw_energy_drop_floor": config.min_raw_energy_drop,
         "all_channel_improvement": config.all_channel_improvement,
         "all_channel_rule": (
             {
@@ -918,34 +929,25 @@ def process_chunk(
                 config,
             )
             accepted = (
-                torch.isfinite(fit["alpha"])
-                & (fit["alpha"] > 0)
-                & torch.isfinite(fit["maximum_channel_normalized_rmse"])
+                torch.isfinite(fit["maximum_channel_normalized_rmse"])
                 & (
                     fit["maximum_channel_normalized_rmse"]
                     <= config.max_channel_normalized_rmse
                 )
-                & (fit["captured_fraction"] >= config.min_captured_fraction)
-                & (fit["fitted_projection_score"] >= config.min_fitted_projection)
-                & (fit["raw_energy_drop"] > config.min_raw_energy_drop)
             )
             if config.all_channel_improvement:
                 accepted &= all_ok
             else:
                 accepted &= fit["improved_channel_count"] >= config.min_improved_channels
             reasons = torch.zeros(len(batch_times), dtype=torch.int32, device=config.device)
-            reasons += (~(torch.isfinite(fit["alpha"]) & (fit["alpha"] > 0))).to(torch.int32) * 1
             reasons += (
                 (~torch.isfinite(fit["maximum_channel_normalized_rmse"]))
                 | (fit["maximum_channel_normalized_rmse"] > config.max_channel_normalized_rmse)
             ).to(torch.int32) * 2
-            reasons += (fit["captured_fraction"] < config.min_captured_fraction).to(torch.int32) * 4
-            reasons += (fit["fitted_projection_score"] < config.min_fitted_projection).to(torch.int32) * 8
             if config.all_channel_improvement:
                 reasons += (~all_ok).to(torch.int32) * 16
             else:
                 reasons += (fit["improved_channel_count"] < config.min_improved_channels).to(torch.int32) * 16
-            reasons += (fit["raw_energy_drop"] <= config.min_raw_energy_drop).to(torch.int32) * 32
             accepted_before_merge += int(accepted.sum().item())
             duplicate = PIPELINE.duplicate_mask(
                 batch_times,
@@ -1290,7 +1292,13 @@ def spherical_kmeans(values, count, seed, iterations):
     generator = torch.Generator(device=values.device).manual_seed(seed)
     if len(values) <= count:
         return values.clone()
-    centers = [values[torch.randint(len(values), (1,), generator=generator).item()]]
+    centers = [
+        values[
+            torch.randint(
+                len(values), (1,), generator=generator, device=values.device
+            ).item()
+        ]
+    ]
     for _ in range(count - 1):
         distance = 1.0 - (values @ torch.stack(centers).T).abs().amax(dim=1)
         probability = distance.clamp_min(0).square()

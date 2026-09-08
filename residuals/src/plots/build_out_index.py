@@ -47,7 +47,10 @@ def load_run_meta(runs: Path, tag: str) -> dict:
             break
     meta = {"n_events": None, "n_rejected": None, "stopping_reason": None,
             "threshold": None, "bar": None, "bars": None, "prototype_count": None,
-            "run_href": None}
+            "run_href": None, "q": None, "spatial_score": None,
+            "all_channel_rule": None, "all_channel_min_fraction": None,
+            "all_channel_required_share": None, "min_fitted_projection": None,
+            "peeling_rounds": None}
     if base is None:
         return meta
     meta["run_href"] = str(Path("..") / "runs" / base.relative_to(RUNS)) + "/"
@@ -70,6 +73,13 @@ def load_run_meta(runs: Path, tag: str) -> dict:
         c = {}
     meta["threshold"] = c.get("threshold")
     meta["prototype_count"] = c.get("prototype_count")
+    meta["q"] = c.get("q")
+    meta["spatial_score"] = c.get("spatial_score")
+    meta["all_channel_rule"] = c.get("all_channel_rule")
+    meta["all_channel_min_fraction"] = c.get("all_channel_min_fraction")
+    meta["all_channel_required_share"] = c.get("all_channel_required_share")
+    meta["min_fitted_projection"] = c.get("min_fitted_projection")
+    meta["peeling_rounds"] = c.get("peeling_rounds")
     return meta
 
 
@@ -180,6 +190,11 @@ td a{color:var(--acc);text-decoration:none;margin-right:9px}
 td a:hover{text-decoration:underline}
 tr:hover td{background:rgba(127,127,127,.08)}
 .count{color:var(--dim);font-size:12px;padding:6px 0}
+.legend{color:var(--dim);font-size:12px;margin:4px 0 10px;max-width:1150px}
+.legend summary{cursor:pointer;color:var(--dim)}
+.legend ul{margin:6px 0 0;padding-left:18px}
+.legend li{margin:2px 0}
+.legend b{color:var(--fg)}
 .grid{display:grid;gap:12px;grid-template-columns:repeat(auto-fill,minmax(300px,1fr))}
 .card{border:1px solid var(--line);border-radius:8px;background:var(--card);padding:9px 11px}
 .card h3{margin:0 0 6px;font-size:12.5px}
@@ -208,12 +223,38 @@ figcaption{font-size:11px;color:var(--dim);padding:3px 0}
 <main>
   <h2>galleries</h2>
   <table id="tbl"><thead><tr>
-    <th data-k="tag">run</th><th data-k="family">fam</th><th data-k="threshold">thr</th>
+    <th data-k="tag">run</th><th data-k="family">fam</th>
+    <th data-k="q" title="codebook size">q</th>
+    <th data-k="spatial_score">error</th>
+    <th data-k="all_channel_rule" title="acceptance rule">rule</th>
+    <th data-k="all_channel_min_fraction" title="min channel fraction">frac</th>
+    <th data-k="all_channel_required_share" title="k-of-n required share">share</th>
+    <th data-k="min_fitted_projection" title="min fitted projection score">proj</th>
+    <th data-k="threshold">thr</th>
     <th data-k="bar">bar</th><th data-k="n_events">events</th>
     <th data-k="n_rejected">rejected</th><th data-k="stopping_reason">stopping</th>
+    <th data-k="peeling_rounds">peel</th>
     <th data-k="n_pngs">pngs</th><th data-k="updated">updated</th><th></th>
   </tr></thead><tbody></tbody></table>
   <div class="count" id="gcount"></div>
+  <details class="legend"><summary>column legend</summary><ul>
+    <li><b>run</b> — gallery directory name under residuals/out/, i.e. the run tag.</li>
+    <li><b>fam</b> — the four-digit family prefix of the run name (0013, 0019, …), or "misc" when the name has none.</li>
+    <li><b>q</b> — size of the temporal codebook: the number of Omega atoms each event picks one of.</li>
+    <li><b>error</b> — the spatial fit error the position search minimizes: mean-channel-rmse averages the noise-normalized reconstruction RMSE over valid channels, max-channel-rmse uses the worst channel.</li>
+    <li><b>rule</b> — how per-channel captured-energy fractions are aggregated into one pass/fail gate: min-channel requires every valid channel to reach the bar, mean-channel averages them, k-of-n counts channels.</li>
+    <li><b>frac</b> — the per-channel captured-energy bar of recording pass 1; it tightens by the pass step each recording pass.</li>
+    <li><b>share</b> — for k-of-n rules, the fraction of valid channels that must reach the bar (0.875 means 7 of 8).</li>
+    <li><b>proj</b> — floor on the fitted projection score, the noise-normalized energy a fitted atom must capture (square root of captured energy).</li>
+    <li><b>thr</b> — detection trigger on the noise-standardized residual, in per-channel robust-noise units (MAD/0.6745). Detection is the same on every pass; only the bar escalates.</li>
+    <li><b>bar</b> — the acceptance-bar schedule across recording passes, shown as first→last per-channel fraction.</li>
+    <li><b>events</b> — accepted events across all passes and peeling rounds.</li>
+    <li><b>rejected</b> — logged candidates that failed one or more acceptance gates.</li>
+    <li><b>stopping</b> — why the run ended: all_passes_complete, max events reached, or an error.</li>
+    <li><b>peel</b> — detect-fit-subtract rounds per chunk visit.</li>
+    <li><b>pngs</b> — number of plot panels in the gallery.</li>
+    <li><b>updated</b> — last write time of the gallery's index.html (UTC).</li>
+  </ul></details>
   <h2>standalone figures</h2>
   <div class="grid" id="figs"></div>
   <h2>collections</h2>
@@ -245,9 +286,15 @@ function render(){
   const rows=D.galleries.filter(r=>fam==="all"||r.family===fam).sort(cmp);
   for(const r of rows){
     const tr=document.createElement("tr");
-    tr.innerHTML=`<td title="${r.gallery_title??""}">${r.tag}</td><td>${r.family}</td><td>${r.threshold??"—"}</td>`+
+    const err=r.spatial_score?r.spatial_score.replace("-channel-rmse","-rmse"):"—";
+    tr.innerHTML=`<td title="${r.gallery_title??""}">${r.tag}</td><td>${r.family}</td>`+
+      `<td>${r.q??"—"}</td><td>${err}</td><td>${r.all_channel_rule??"—"}</td>`+
+      `<td>${r.all_channel_min_fraction??"—"}</td>`+
+      `<td>${r.all_channel_required_share??"—"}</td>`+
+      `<td>${r.min_fitted_projection??"—"}</td><td>${r.threshold??"—"}</td>`+
       `<td>${r.bars?r.bars.join("→"):"—"}</td><td>${fmt(r.n_events)}</td>`+
       `<td>${fmt(r.n_rejected)}</td><td>${r.stopping_reason??"—"}</td>`+
+      `<td>${r.peeling_rounds??"—"}</td>`+
       `<td>${r.n_pngs}</td><td>${r.updated}</td>`+
       `<td><a href="${r.gallery_href}">open</a>`+
       (r.run_href?`<a href="${r.run_href}">data</a>`:"")+`</td>`;
