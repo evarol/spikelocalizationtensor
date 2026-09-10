@@ -1,6 +1,6 @@
 # Plot Suite Completeness
 **Created:** 2026-08-30
-**Last updated:** 2026-08-30
+**Last updated:** 2026-09-08
 
 ## The rule
 
@@ -35,6 +35,21 @@ coefficient embeddings, soft/hard readout comparisons, multipole support
 diagnostics, saved DREDge results and corrected families, and the full
 atom-viewer pack are unavailable from the persisted state (the
 time/depth/amplitude inputs for a later DREDge solve are present).
+
+## Trim (2026-09-08)
+
+Per the user's cleanup, four panels are dropped from the standard suite —
+both from the scripts and retrospectively from the existing galleries:
+`localization_by_round_cohort.png`, `xyz_localization_by_round.png`,
+`reconstruction_examples_score_boundary.png`, and
+`spiketensor_depth_time_basis.png`. `build_plot_gallery.py` no longer
+registers them and `0016_onehot_lattice_plots.py` /
+`plot_spiketensor_residual_pursuit.py` no longer produce them, so future
+suites (including the pending trimmed-sweep and 024 galleries) render ~10
+top-level figures + the two reconstruction subdirs. The completeness rule
+above still holds: `temporal_codebook_usage.png` with every Omega row, the
+three recording replays, and the offline browser stay mandatory. Gallery and
+data links in the out-hub now open in a new tab.
 
 ## Links
 

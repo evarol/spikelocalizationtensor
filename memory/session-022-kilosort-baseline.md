@@ -72,6 +72,78 @@ ContamPct quality summary, and a distribution-level cross-comparison against the
 versus 568,889 accepted; 0019's rejected proposals run 100–120k per 50 s).
 `build_out_index.py` picks the gallery up as family 0022 automatically.
 
+## Overlap census: post-0018 runs vs the Kilosort spike times (2026-09-09)
+
+Census script `/state/partition1/job-17271501/opencode/ks_overlap_census.py`
+(+ `ks_good_time_recall.py`), results in
+`residuals/runs/dataset1_p1/kilosort_overlap_census/{summary,good_time_recall}.json`.
+Matching is per-channel and time-windowed at ±0.5 ms (sample units, 30 kHz),
+the same convention as the 019/SLT cross-fit; a second time-only pass drops
+the channel condition entirely. KS `spikes.amps` and `clusters.amps` are all
+zero in this pykilosort output, so no amplitude stratification is possible —
+the good/mua cluster split is the only quality axis.
+
+Reference set: 6,180,912 KS spikes, of which 1,402,613 sit on the 149
+good clusters.
+
+**No over-detection.** Time-only precision is 0.98–1.00 for every run —
+essentially every accepted event (pass 0 and pass 1+ alike, every rule,
+every Q, both detector families) coincides with some KS spike time within
+±0.5 ms. Chance level is ~10% (105 KS spikes/s × 1 ms window), so this is
+a real alignment, and it holds even for the 2.4M-event perchannel5-q32 run
+(0.977). The all-channel bar is filtering noise effectively.
+
+**Under-detection at the 0019-default settings** (the 20% bar is 0019's founding default and the sweeps' baseline, never a decided production recipe — the census points at mean f₀ 0.05 as the closest-to-Kilosort operating point). Time-only recall of KS-good
+spikes: mean-rule runs 0.86–0.94 (mean f₀ 0.05 = 0.939), kofn 0.73–0.90,
+min/flat at f₀ 0.05–0.10 ≈ 0.64–0.76, the 0019-default 20% bar 0.38–0.57
+across Q, strictest runs 0.38. So the 0019-lineage 20% bar leaves ~half of
+KS-good spike times unpeeled; only mean f₀ ≤ 0.10 approaches full coverage.
+Recall against ALL KS spikes (including mua noise) is 0.29–0.82, and the
+same-channel numbers are much lower still (recall 0.09–0.42, precision
+0.44–0.48) — but time-only precision ≈ 1.0 while same-channel precision is
+0.45, which means our detection channel rarely equals KS's cluster peak
+channel: the same-channel deficit is channel-assignment bookkeeping, not
+missing detection.
+
+**Pass-1+ events are not junk by this measure** — they match KS times at
+0.98+ like pass-0 events, but they are so few (the duplicate wall) that
+they add almost no coverage. The residual-under-detection levers, in
+order: the acceptance bar (f₀ sweep maps it directly), the 5σ proposal
+floor (caps what is ever nominated), and the duplicate wall (caps pass-1+
+recovery — 028's phase-2 leftover-vs-event discriminator is the designed
+fix). Caveats: KS-good is not ground truth, and time-coincidence tolerates
+±0.5 ms and any channel, so "recall" here bounds event-time coverage, not
+1:1 spike correspondence.
+
+**Rejection census (same day, `rejection_census.json`).** Matching the
+consolidated `rejected_*` tables against KS times splits under-detection
+into proposal-side vs acceptance-side, per run (scripts
+`ks_rejection_census.py`/`ks_overlap_census.py`/`ks_good_time_recall.py`
+live in the census dir; compute nodes cannot see `/state/…/job-*/` scratch,
+so sbatch-run scripts must live in the repo).
+
+- **The detector nominates essentially all of Kilosort's good spikes.**
+  KS-good coverage by proposals (accepted ∪ rejected) is 0.945–0.948 for
+  every 0019-lineage run and 0.999–1.000 for every convolving run —
+  under-detection is NOT a detection problem.
+- **The acceptance bar is the whole story in the 0019 lineage.** The same
+  ~95% proposal coverage converts to 0.38–0.94 accepted depending on
+  rule/bar; the bar's cost ("proposed but rejected") runs 0.56 at the
+  strict f₀ 0.30 bar down to 0.009 at mean f₀ 0.05.
+- **99.2–99.3% of 0019-lineage rejections sit at KS-active times** — the
+  bar is killing real-spike proposals, not noise. Among those real-spike
+  rejections at the 20% bar, the all-channel bit is present in 85%
+  (pass 0: 99.2%), while at mean f₀ 0.05 pass 0 rejections collapse to 65k
+  and pass 1+ rejections are 96% duplicate-flagged — at loose settings the
+  duplicate wall, not the bar, is the residual under-detection mechanism.
+  kofn f₀ 0.20 splits ~48/52 between the bar and the wall.
+- **024 convolving rejections are a different beast**: 38–410M per run
+  (the detector nominates far more), 91% at KS-active times, and 99%
+  killed by the all-channel bar (bit 256 marks convolving proposals). Its
+  proposal coverage of KS-good is 1.000 and accepted coverage 0.46–0.78 —
+  the bar turns its extra sensitivity into a rejection flood rather than
+  yield.
+
 ## Links
 
 - [[session-009-ibl-style-pursuit]] — where the ibl-sorter reference source lives and how its preprocessing inspired 009/010

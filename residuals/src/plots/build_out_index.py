@@ -296,8 +296,8 @@ function render(){
       `<td>${fmt(r.n_rejected)}</td><td>${r.stopping_reason??"—"}</td>`+
       `<td>${r.peeling_rounds??"—"}</td>`+
       `<td>${r.n_pngs}</td><td>${r.updated}</td>`+
-      `<td><a href="${r.gallery_href}">open</a>`+
-      (r.run_href?`<a href="${r.run_href}">data</a>`:"")+`</td>`;
+      `<td><a href="${r.gallery_href}" target="_blank" rel="noopener">open</a>`+
+      (r.run_href?`<a href="${r.run_href}" target="_blank" rel="noopener">data</a>`:"")+`</td>`;
     tb.appendChild(tr);
   }
   document.getElementById("gcount").textContent=`${rows.length} galleries`;

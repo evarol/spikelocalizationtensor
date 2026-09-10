@@ -1,7 +1,16 @@
 # Master Codebook from All IBL Mice (0026)
 **Created:** 2026-09-04
 **Last updated:** 2026-09-04
-**Status:** harvest COMPLETE (808/812 shards + `harvest_summary.json`/`skipped_clips.json` in `residuals/runs/ibl_bwm/master_codebook_q32/`); init crashed on a 0019 device bug (fixed 2026-09-08, see below) before any Omega was written, so no codebook exists yet — resubmitted as `17222215`. Outputs, once the fit lands: `omega.npy`, `initial_omega.npy`, prototypes/assignment/history, and `omega_source.json` in that directory, with an atomic checkpoint per fit iteration.
+**Status:** COMPLETE (2026-09-08) — the master codebook is saved at
+`residuals/runs/ibl_bwm/master_codebook_q32/omega.npy` (32 × 90 float32)
+alongside `initial_omega.npy`, `atom_prototype.npy`/`initial_prototypes.npy`,
+`alternating_history.json` (10 iterations, objective 9.749e9 → 9.744e9,
+max row change down to ~0.04, every atom carrying 1.7k–17k events — no dead
+atoms), `fit_pool.json`, `omega_source.json`, and `prototype_fit_complete.json`.
+The whole init + alternating fit took 25:47 on the resubmitted `17222215`
+after the spherical_kmeans device fix; harvest (808/812 shards) was already
+on disk. Next step when wanted: point a 0019-lineage run at this Omega
+instead of per-recording calibration.
 
 ## Why
 

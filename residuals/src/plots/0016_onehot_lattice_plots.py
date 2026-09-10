@@ -285,64 +285,6 @@ def plot_stopping_diagnostics(run, output):
     plt.close(figure)
 
 
-def plot_localization_cohorts(run, output):
-    sources = np.load(run / "global_sources.npy", mmap_mode="r")
-    rounds = np.load(run / "peeling_round.npy", mmap_mode="r")
-    contacts = np.load(run / "channel_positions.npy")
-    n_rounds = int(rounds.max()) + 1
-    cohorts = [
-        ("all rounds", None),
-        ("round 1", (0, 1)),
-        ("rounds 2–5", (1, 5)),
-        ("rounds 6–15", (5, 15)),
-        ("rounds 16–30", (15, 30)),
-        (f"rounds 31–{n_rounds}", (30, n_rounds)),
-    ]
-    x_edges = np.linspace(contacts[:, 0].min() - 170, contacts[:, 0].max() + 170, 321)
-    depth_edges = np.linspace(
-        contacts[:, 1].min() - 170, contacts[:, 1].max() + 170, 769
-    )
-    counts = []
-    sizes = []
-    for _, bounds in cohorts:
-        if bounds is None:
-            keep = np.ones(len(rounds), dtype=bool)
-        else:
-            keep = (rounds >= bounds[0]) & (rounds < bounds[1])
-        count, _, _ = np.histogram2d(
-            np.asarray(sources[keep, 1]), np.asarray(sources[keep, 0]),
-            bins=(depth_edges, x_edges),
-        )
-        counts.append(count)
-        sizes.append(int(keep.sum()))
-    nonzero = np.concatenate([count[count > 0] for count in counts])
-    norm = LogNorm(vmin=1, vmax=max(1.0, float(np.quantile(nonzero, 0.997))))
-
-    figure, axes = plt.subplots(2, 3, figsize=(15, 12), constrained_layout=True)
-    image = None
-    for axis, (label, _), count, size in zip(axes.flat, cohorts, counts, sizes):
-        image = axis.imshow(
-            count, origin="lower", aspect="auto", cmap="inferno", norm=norm,
-            interpolation="nearest",
-            extent=(x_edges[0], x_edges[-1], depth_edges[0], depth_edges[-1]),
-        )
-        axis.scatter(
-            contacts[:, 0], contacts[:, 1], s=3, marker="s",
-            facecolors="none", edgecolors="#55d6d6", linewidths=0.25,
-        )
-        axis.set(
-            title=f"{label} · {size:,} events",
-            xlabel="global lateral position (µm)",
-            ylabel="probe depth (µm)",
-        )
-    figure.colorbar(image, ax=axes, label="events per spatial bin", pad=0.01)
-    figure.suptitle("one-hot lattice localization density by peeling-round cohort", fontsize=14)
-    figure.savefig(
-        output / "localization_by_round_cohort.png", dpi=800, bbox_inches="tight"
-    )
-    plt.close(figure)
-
-
 def localization_coordinates(run):
     sources = np.load(run / "global_sources.npy", mmap_mode="r")
     return {
@@ -464,6 +406,8 @@ def plot_xyz_localizations(run, output):
     plt.close(figure)
 
     n_rounds = int(rounds.max()) + 1
+    if n_rounds <= 1:
+        return
     cohorts = [
         ("round 1", (0, 1)),
         ("rounds 2–5", (1, 5)),
@@ -635,16 +579,6 @@ def select_round_examples(rounds, scores, count):
     return np.asarray(selected, dtype=np.int64)
 
 
-def select_boundary_examples(times, scores, count):
-    edges = np.linspace(float(times.min()), float(times.max()) + 1, count + 1)
-    selected = []
-    for low, high in zip(edges[:-1], edges[1:]):
-        rows = np.flatnonzero((times >= low) & (times < high))
-        if len(rows):
-            selected.append(rows[np.argmin(scores[rows])])
-    return np.asarray(selected, dtype=np.int64)
-
-
 def plot_reconstruction_grid(values, output, title):
     measured = values["residual_waveforms"]
     predicted = values["predictions"]
@@ -763,25 +697,13 @@ def plot_reconstruction_examples(run, output, chunk_index=0, count=6):
             raise KeyError(f"{path} is missing reconstruction fields: {sorted(missing)}")
         rounds = np.asarray(archive["peeling_round"])
         scores = np.asarray(archive["fitted_projection_score"])
-        times = np.asarray(archive["spike_times"])
-        selections = {
-            "reconstruction_examples_by_round.png": select_round_examples(
-                rounds, scores, count
-            ),
-            "reconstruction_examples_score_boundary.png": select_boundary_examples(
-                times, scores, count
-            ),
-        }
-        for name, indices in selections.items():
-            values = {field: np.asarray(archive[field][indices]) for field in fields}
-            plot_reconstruction_grid(
-                values,
-                output / name,
-                (
-                    f"one-hot lattice saved reconstruction examples · chunk {chunk_index} · "
-                    + ("round progression" if "by_round" in name else "lowest fitted score in each time segment")
-                ),
-            )
+        values = {field: np.asarray(archive[field][select_round_examples(rounds, scores, count)])
+                  for field in fields}
+        plot_reconstruction_grid(
+            values,
+            output / "reconstruction_examples_by_round.png",
+            f"one-hot lattice saved reconstruction examples · chunk {chunk_index} · round progression",
+        )
 
 
 def main():
@@ -794,15 +716,15 @@ def main():
     print(f"wrote {args.out / 'peeling_overview.png'}", flush=True)
     plot_stopping_diagnostics(args.run, args.out)
     print(f"wrote {args.out / 'stopping_diagnostics.png'}", flush=True)
-    plot_localization_cohorts(args.run, args.out)
-    print(f"wrote {args.out / 'localization_by_round_cohort.png'}", flush=True)
     plot_xyz_localizations(args.run, args.out)
     print(f"wrote {args.out / 'xyz_localization_density.png'}", flush=True)
-    print(f"wrote {args.out / 'xyz_localization_by_round.png'}", flush=True)
+    rounds = np.load(args.run / "peeling_round.npy", mmap_mode="r")
+    if int(rounds.max()) + 1 > 1:
+        print(f"wrote {args.out / 'xyz_localization_by_round.png'}", flush=True)
+        plot_reconstruction_examples(args.run, args.out)
+        print(f"wrote reconstruction example panels under {args.out}", flush=True)
     plot_xyzsigma_scatter(args.run, args.out)
     print(f"wrote {args.out / 'xyzsigma_localization_scatter.png'}", flush=True)
-    plot_reconstruction_examples(args.run, args.out)
-    print(f"wrote reconstruction example panels under {args.out}", flush=True)
 
 
 if __name__ == "__main__":

@@ -48,16 +48,6 @@ PANEL_REGISTRY = {
         "temporal codebook usage",
         "Every Omega row with recording-wide and per-round assignment usage.",
     ),
-    "localization_by_round_cohort.png": (
-        "localization",
-        "localization by round cohort",
-        "Localization distributions stratified by peeling round.",
-    ),
-    "xyz_localization_by_round.png": (
-        "localization",
-        "xyz localization by round",
-        "Three-dimensional source coordinates across peeling rounds.",
-    ),
     "xyz_localization_density.png": (
         "localization",
         "xyz localization density",
@@ -77,11 +67,6 @@ PANEL_REGISTRY = {
         "reconstruction",
         "reconstruction examples by round",
         "Observed and predicted snippets sampled across peeling rounds.",
-    ),
-    "reconstruction_examples_score_boundary.png": (
-        "reconstruction",
-        "score-boundary reconstructions",
-        "Examples near the fitted-projection acceptance boundary.",
     ),
     "reconstructions/reconstruction_diagnostics.png": (
         "reconstruction",
@@ -112,11 +97,6 @@ PANEL_REGISTRY = {
         "reconstruction",
         "full-recording replay",
         "Every chunk replayed: preprocessed input versus residuals after each recording pass, signed-block decimated.",
-    ),
-    "spiketensor/spiketensor_depth_time_basis.png": (
-        "depth_time",
-        "SpikeTensor-style depth × time basis",
-        "Depth-time density separated by the fitted temporal basis index.",
     ),
 }
 

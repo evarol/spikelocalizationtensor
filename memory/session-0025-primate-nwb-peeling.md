@@ -476,4 +476,5 @@ also already on disk with the full panel set, so the only missing gallery is
 - [[session-019-all-channel-error]]
 - [[session-023-acceptance-rule-variants]]
 - [[session-024-convolving-detection-peeling]]
+- [[session-0029-dredge-motion-primate]]
 - [[project_overview]]

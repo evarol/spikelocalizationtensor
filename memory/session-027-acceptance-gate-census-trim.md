@@ -163,12 +163,25 @@ The policy kill tally is eight tasks, not two. Beyond the known 6–7 (which
 completed on the resubmission `16991857`), tasks 10, 11, 12, 14, 15, 17 —
 kofn 05/10/15/30 and flat 05/15 — were SIGTERM-killed at ~2h15–2h30. They
 were queued before the TERM-trap fix landed, so they ran the old script and
-died instead of requeueing. Nothing was resubmitted for them; their run
-dirs hold consolidated pass-0 output and resume cleanly. Six `--resume`
-resubmissions (via the same sweep sbatch with the fixed trap) would finish
-the matrix. **Done 2026-09-08:** the six tasks were resubmitted as array
-`17221954` (tasks 10, 11, 12, 14, 15, 17 through the fixed sbatch; pending
-on `QOSGrpGRES` at submission, queued behind 024's perchannel5-Q64).
+died instead of requeueing. Resubmitted 2026-09-08 as array `17221954` and
+all six completed exit 0 overnight; the sweep is now 20/20 with every run
+ending `all_passes_complete`. Final totals, n_events:
+
+| rule \ f₀ | 0.05 | 0.10 | 0.15 | 0.20 | 0.30 |
+|---|---|---|---|---|---|
+| min | 1,256,018 | 1,052,923 | 863,953 | 694,578 | 419,167 |
+| mean | 2,271,336 | 2,182,316 | 2,049,274 | 1,899,946 | 1,519,955 |
+| kofn | 1,932,302 | 1,777,007 | 1,609,042 | 1,431,736 | 1,066,693 |
+| flat | 1,272,957 | 1,067,203 | 876,467 | 704,695 | 424,346 |
+
+The recovered cells sharpen the ordering: kofn sits well above flat at
+every bar (1.93M vs 1.27M at f₀ 0.05) — tolerating one weak channel is
+worth more than dropping the bar for all channels — and both decline
+monotonically in f₀ like their siblings. Plot suites for these six runs
+went out 2026-09-09 as array `17271740`. Against Kilosort's spike times,
+this sweep is the under-detection dial made explicit: time-only recall of
+KS-good spikes runs 0.38 (f₀ 0.30) → 0.94 (mean f₀ 0.05) across the
+matrix — see [[session-022-kilosort-baseline]]'s overlap census.
 
 A parameterized plot suite for the trimmed runs is now queued:
 `residuals/src/plots/0019_allchannel_trimmed_f0_sweep_plots.sbatch` — an
@@ -182,11 +195,15 @@ runs land.
 
 ## Next steps
 
-- [ ] When the six resubmitted tasks (`17221954`) land: record the missing
-      cells in the totals table, then submit their plot suites
-      (`--array=10,11,12,14,15,17` on the trimsweep plots sbatch).
-- [ ] When `17222019` lands: verify all 14 galleries carry the full
-      14-figure set.
+- [x] When the six resubmitted tasks (`17221954`) land: totals recorded in
+      the final table above; plot suites submitted as `17271740`.
+- [x] Gallery verification (2026-09-09): all twenty f₀-sweep galleries exist
+      with an identical 10-png layout (raster, peeling overview, three
+      replays, stopping diagnostics, temporal usage/cones, xyz density,
+      xyzsigma scatter, plus index.html and the reconstructions/spiketensor
+      subfolders) — the fourteen `17222019` runs and the six `17271740`
+      runs (all completed exit 0 that morning) are uniform, so the
+      "14-figure" count in the sbatch notes was a mislabel, not a gap.
 - [ ] Sigma-mix / near-surface quality audit across the sweep (the open
       item inherited from 019/023), worst case expected at mean f₀ = 0.05
       (softest rule × loosest bar).

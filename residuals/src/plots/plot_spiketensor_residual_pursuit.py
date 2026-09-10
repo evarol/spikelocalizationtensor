@@ -20,27 +20,6 @@ from plot_raw_residual_reconstructions import (
 )
 
 
-BACKGROUND = np.asarray((0.05, 0.05, 0.05), dtype=np.float32)
-
-
-def colour_raster(x, y, label, palette, xlim, ylim, nx, ny):
-    ix = np.floor((x - xlim[0]) * nx / (xlim[1] - xlim[0])).astype(np.int64)
-    iy = np.floor((y - ylim[0]) * ny / (ylim[1] - ylim[0])).astype(np.int64)
-    keep = (ix >= 0) & (ix < nx) & (iy >= 0) & (iy < ny)
-    flat = iy[keep] * nx + ix[keep]
-    count = np.bincount(flat, minlength=nx * ny).reshape(ny, nx).astype(np.float32)
-    rgb = np.zeros((ny, nx, 3), dtype=np.float32)
-    for channel in range(3):
-        rgb[..., channel] = np.bincount(
-            flat, weights=palette[label[keep], channel], minlength=nx * ny
-        ).reshape(ny, nx)
-    mass = gaussian_filter(count, 0.5)
-    for channel in range(3):
-        rgb[..., channel] = gaussian_filter(rgb[..., channel], 0.5) / np.maximum(mass, 1e-6)
-    intensity = np.clip(1.35 * (1 - np.exp(-mass / 1.4)), 0, 1)
-    return BACKGROUND * (1 - intensity[..., None]) + rgb * intensity[..., None]
-
-
 def load_examples(run, count=4):
     paths = sorted((run / "chunks").glob("chunk_*.npz")) or sorted(run.glob("pass_*/chunk_*.npz"))
     path = paths[0]
@@ -104,13 +83,10 @@ def plot_spikes(run, out, metadata):
     plt.close(figure)
 
 
-def plot_density_and_raster(run, out, metadata):
+def plot_density(run, out):
     source = np.load(run / "global_sources.npy", mmap_mode="r")
-    times = np.load(run / "spike_times.npy", mmap_mode="r")
     alpha = np.abs(np.load(run / "alpha.npy", mmap_mode="r"))
-    temporal = np.load(run / "temporal_idx.npy", mmap_mode="r")
     contacts = np.load(run / "channel_positions.npy")
-    omega = np.load(run / "omega.npy")
     xlim = (contacts[:, 0].min() - 80, contacts[:, 0].max() + 80)
     ylim = tuple(np.quantile(source[:, 1], (.002, .998)))
     hist, _, _ = np.histogram2d(source[:, 1], source[:, 0], bins=(960, 160), range=(ylim, xlim), weights=alpha)
@@ -123,17 +99,6 @@ def plot_density_and_raster(run, out, metadata):
     axis.set(xlabel="lateral x (µm)", ylabel="probe depth y (µm)", title="amplitude-weighted localization density")
     figure.savefig(out / "spiketensor_localization_density.png", dpi=800, bbox_inches="tight")
     plt.close(figure)
-    palette = plt.colormaps["rainbow"](np.linspace(0, 1, len(omega)))[:, :3]
-    minutes = np.asarray(times, dtype=np.float64) / (60 * float(metadata["fs"]))
-    image = colour_raster(minutes, source[:, 1], temporal, palette, (0, minutes.max()), ylim, 1750, 960)
-    figure, axis = plt.subplots(figsize=(15, 7.5), constrained_layout=True, facecolor=BACKGROUND)
-    axis.imshow(image, origin="lower", extent=(0, minutes.max(), *ylim), aspect="auto", interpolation="nearest")
-    axis.set(xlabel="recording time (min)", ylabel="probe depth (µm)", title="depth × time categorical localization raster")
-    axis.set_facecolor(BACKGROUND)
-    axis.tick_params(colors="#dddddd")
-    for spine in axis.spines.values(): spine.set_color("#444444")
-    figure.savefig(out / "spiketensor_depth_time_basis.png", dpi=800, facecolor=BACKGROUND, bbox_inches="tight")
-    plt.close(figure)
 
 
 def main():
@@ -144,7 +109,7 @@ def main():
     args.out.mkdir(parents=True, exist_ok=True)
     metadata = json.loads((args.run / "config.json").read_text())
     plot_spikes(args.run, args.out, metadata)
-    plot_density_and_raster(args.run, args.out, metadata)
+    plot_density(args.run, args.out)
 
 
 if __name__ == "__main__":
