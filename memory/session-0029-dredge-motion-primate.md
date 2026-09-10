@@ -152,12 +152,22 @@ the lazily-preprocessed recording to feed `estimate_motion`), and the
 inner `bash -c` had no `set -e`, so a failed motion stage cascaded into a
 confusing raster failure. Fixed both (per-subject SERIES wiring copied
 from the peaks sbatch; recording passed positionally with `set -e` inside)
-and resubmitted as **17298551**, now RUNNING: all 1,226,587 peaks loaded
-and DREDge's cross-correlation pass was ~2/3 done at ~6 s/window when
-last checked, with the raster rendering after.
+and resubmitted as **17298551**: all 1,226,587 peaks loaded and the DREDge
+cross-correlation and solve stages ran through in under two minutes.
+The motion stage itself SUCCEEDED — `motion.npz` + `_motion_done` saved,
+displacement shape (2556 time bins, 9 windows), displacement µm
+median 675.5 / p95 1678.3 / max 2932.5, consistent with the ~3 mm
+insertion drift the residual-sourced chain registered. The job still
+ended FAILED at 3:11 on a third latent gap: the raster stage
+(`correct_motion_on_peaks`) also needs the recording, and the sbatch
+didn't pass the recording args to it. Fixed (raster call now takes
+recording path + series positionally) and resubmitted as **17299076** —
+the `_motion_done` marker makes the motion stage skip, so this attempt
+only runs the corrected-locations save and the raster figures.
 
 ## Links
 
 - [[session-0025-primate-nwb-peeling]]
 - [[session-024-convolving-detection-peeling]]
+- [[feedback_multistage_sbatch_wiring]] — the distilled lesson from tonight's three-fix cycle
 - [[project_overview]]

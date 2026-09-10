@@ -67,6 +67,8 @@ singularity exec --nv --overlay /scratch/${USER}/_ENVS/pytorch.ext3:ro \
             --device cuda
         python residuals/src/preprocessing/0025_sidredge.py \
             raster \
+            --recording-path "$1" \
+            --electrical-series-path "$2" \
             --output-dir "$3" \
             --plot-dir "$4" \
             --max-disp-um "$5"

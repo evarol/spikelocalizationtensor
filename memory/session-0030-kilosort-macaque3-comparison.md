@@ -94,8 +94,15 @@ code that assumes a sync channel is physically present.
   Sanity-tested against dataset1_p1's existing Kilosort ALF output plus the
   0019-default 20% bar run and it reproduces session-022's documented number
   almost exactly (0.4805 recall of good Kilosort spikes vs the recorded 0.48),
-  so the matching logic is trusted; it just hasn't been pointed at macaque3 yet
-  because that Kilosort run (17295617) hasn't finished.
+so the matching logic is trusted; it just hasn't been pointed at macaque3 yet
+because that Kilosort run (17295617) hasn't finished.
+
+Update (2026-09-09, night): the full Kilosort run 17295617 **COMPLETED**
+in 1:54 — 14,783,360 spikes after cutoff across 1,765 clusters, ALF
+conversion done, everything in
+`residuals/runs/primate/kilosort_iblsorter_macaque3/`. For scale:
+dataset1_p1 (21 min) gave 6.18M spikes / 839 clusters, macaque3 (43 min)
+gives 14.78M / 1,765. The census step below is now unblocked.
 
 ## What's still needed for the literal residual-trace comparison
 
@@ -128,8 +135,9 @@ side, not pixel-identical.
       Kilosort ALF output and the 0019-default 20% bar run
       (`0019_allchannel_pass3_round1_fraction20_step10_fitted8`) — reproduces
       session-022's documented recall almost exactly.
-- [ ] Once macaque3's Kilosort run (17295617) finishes, run the census against
-      `0025_macaque3_0019_mean20_q32`.
+- [x] Once macaque3's Kilosort run (17295617) finishes, run the census against
+      `0025_macaque3_0019_mean20_q32` — run completed 2026-09-09 (14.78M spikes,
+      1,765 clusters); census not yet run.
 - [ ] Implement the literal residual-trace comparison per the recipe above, and
       verify the template-offset empirically on a real aligned spike before
       trusting the subtraction pixel-by-pixel.
